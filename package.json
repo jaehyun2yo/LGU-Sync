@@ -1,0 +1,15 @@
+{
+  "name": "webhard-sync",
+  "version": "1.0.0",
+  "description": "LGU+ 외부웹하드 → 자체웹하드 단방향 동기화 Electron 앱",
+  "main": "./out/main/index.js",
+  "scripts": {},
+  "author": "YJLaser",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "^40.6.0",
+    "electron-vite": "^5.0.0"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+.env
+*.db
+*.db-wal
+*.db-shm
+downloads/
+release/
+.omc/
