@@ -21,6 +21,9 @@
   "include": [
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",
-    "src/shared/**/*.ts"
+    "src/shared/**/*.ts",
+    "src/core/types/**/*.ts",
+    "src/core/errors/**/*.ts",
+    "src/core/db/types.ts"
   ]
 }

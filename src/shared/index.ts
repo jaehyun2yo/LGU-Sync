@@ -1,2 +1,2 @@
 // Shared types and utilities (IPC types, etc.)
-export {}
+export * from './ipc-types'
