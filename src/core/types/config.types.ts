@@ -9,6 +9,8 @@ export interface AppConfig {
   webhard: {
     apiUrl: string
     apiKey: string
+    backendUrl: string
+    backendApiKey: string
   }
   sync: {
     pollingIntervalSec: number

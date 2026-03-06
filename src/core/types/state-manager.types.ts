@@ -36,6 +36,7 @@ export interface IStateManager {
   updateFolder(id: string, data: Partial<SyncFolderRow>): void
   getFolders(enabledOnly?: boolean): SyncFolderRow[]
   getFolder(id: string): SyncFolderRow | null
+  getFolderByLguplusId(lguplusFolderId: string): SyncFolderRow | null
 
   // Event log
   logEvent(event: SyncEventInsert): void

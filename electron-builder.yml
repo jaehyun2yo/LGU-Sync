@@ -1,0 +1,42 @@
+appId: com.yjlaser.webhard-sync
+productName: 외부웹하드동기화프로그램
+copyright: Copyright © 2026 유진레이저목형
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - out/**/*
+  - "!out/renderer/**/*.map"
+
+extraMetadata:
+  main: ./out/main/index.js
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-Setup.${ext}
+  signAndEditExecutable: false
+
+forceCodeSigning: false
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  installerLanguages:
+    - ko
+  language: "1042"
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 외부웹하드동기화
+
+# Native dependencies (better-sqlite3) are externalized and bundled
+npmRebuild: true
+
+asar: true
+
+publish: null

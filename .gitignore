@@ -9,3 +9,6 @@ downloads/
 release/
 .omc/
 .worktrees/
+.serena/
+playwright-report/
+test-results/

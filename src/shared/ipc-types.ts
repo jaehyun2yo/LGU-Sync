@@ -255,6 +255,54 @@ export interface NotificationItem {
   createdAt: string
 }
 
+// ── Discovery types ──
+
+export interface DiscoveryResult {
+  total: number
+  newFolders: number
+  existingFolders: number
+  folders: Array<{
+    id: string
+    lguplusFolderId: string
+    folderName: string
+    isNew: boolean
+  }>
+}
+
+// ── Migration types ──
+
+export interface MigrationFolderInfo {
+  id: string
+  lguplusFolderId: string
+  folderName: string
+  fileCount: number
+  syncedCount: number
+}
+
+export interface MigrationStartRequest {
+  folderIds: string[]
+  forceRescan?: boolean
+}
+
+export interface MigrationProgress {
+  folderId: string
+  folderName: string
+  currentFile: string
+  completedFiles: number
+  totalFiles: number
+  completedBytes: number
+  totalBytes: number
+}
+
+export interface MigrationResult {
+  scannedFolders: number
+  newFolders: number
+  scannedFiles: number
+  syncedFiles: number
+  failedFiles: number
+  durationMs: number
+}
+
 // ── Failed event ──
 
 export interface FailedEvent {
@@ -293,6 +341,11 @@ export interface IpcChannelMap {
   }
   'folders:tree': { request: void; response: ApiResponse<FolderTreeNode[]> }
   'folders:toggle': { request: FolderToggleRequest; response: ApiResponse<void> }
+  'folders:discover': { request: void; response: ApiResponse<DiscoveryResult> }
+
+  // Migration
+  'migration:scan': { request: void; response: ApiResponse<MigrationFolderInfo[]> }
+  'migration:start': { request: MigrationStartRequest; response: ApiResponse<MigrationResult> }
 
   // Logs
   'logs:list': { request: LogListRequest; response: ApiResponse<Paginated<LogEntry>> }
