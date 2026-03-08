@@ -1,7 +1,18 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { RefreshCw, Folder, Check, Loader, Search } from 'lucide-react'
 import { cn, formatBytes, formatRelativeTime } from '../lib/utils'
+import { useSort } from '../hooks/useSort'
+import { SortableHeader } from '../components/SortableHeader'
 import type { FolderInfoIpc } from '../../shared/ipc-types'
+
+type FolderSettingsSortField = 'folderName' | 'fileCount' | 'lastSyncAt' | 'syncEnabled'
+
+const folderSettingsComparators: Record<FolderSettingsSortField, (a: FolderInfoIpc, b: FolderInfoIpc) => number> = {
+  folderName: (a, b) => a.folderName.localeCompare(b.folderName, 'ko'),
+  fileCount: (a, b) => a.fileCount - b.fileCount,
+  lastSyncAt: (a, b) => (a.lastSyncAt ?? '').localeCompare(b.lastSyncAt ?? ''),
+  syncEnabled: (a, b) => Number(a.syncEnabled) - Number(b.syncEnabled),
+}
 
 // ── Folder row component ──
 
@@ -98,6 +109,13 @@ export function FolderSettingsPage() {
   const [toggling, setToggling] = useState<string | null>(null)
   const [scanning, setScanning] = useState(false)
   const [scanMessage, setScanMessage] = useState<string | null>(null)
+
+  const {
+    sorted: sortedFolders,
+    sortField,
+    sortOrder,
+    handleSortChange,
+  } = useSort(folders, 'folderName' as FolderSettingsSortField, 'asc', folderSettingsComparators)
 
   // Load folders
   const loadFolders = useCallback(async () => {
@@ -236,10 +254,18 @@ export function FolderSettingsPage() {
         <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
           <div className="w-5" /> {/* checkbox spacer */}
           <div className="w-4" /> {/* icon spacer */}
-          <div className="flex-1">폴더명</div>
-          <div className="w-16 text-right">파일 수</div>
-          <div className="w-24 text-right">마지막 동기화</div>
-          <div className="w-16 text-center">상태</div>
+          <div className="flex-1">
+            <SortableHeader field="folderName" label="폴더명" currentField={sortField} currentOrder={sortOrder} onSort={handleSortChange} />
+          </div>
+          <div className="w-16 text-right">
+            <SortableHeader field="fileCount" label="파일 수" currentField={sortField} currentOrder={sortOrder} onSort={handleSortChange} className="justify-end" />
+          </div>
+          <div className="w-24 text-right">
+            <SortableHeader field="lastSyncAt" label="마지막 동기화" currentField={sortField} currentOrder={sortOrder} onSort={handleSortChange} className="justify-end" />
+          </div>
+          <div className="w-16 text-center">
+            <SortableHeader field="syncEnabled" label="상태" currentField={sortField} currentOrder={sortOrder} onSort={handleSortChange} className="justify-center" />
+          </div>
         </div>
 
         {/* Scrollable list */}
@@ -255,7 +281,7 @@ export function FolderSettingsPage() {
               <p className="text-xs mt-1">외부 웹하드에서 폴더를 동기화하면 표시됩니다</p>
             </div>
           ) : (
-            folders.map((folder) => (
+            sortedFolders.map((folder) => (
               <FolderRow
                 key={folder.folderId}
                 folder={folder}

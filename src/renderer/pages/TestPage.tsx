@@ -17,6 +17,8 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { useSort } from '../hooks/useSort'
+import { SortableHeader } from '../components/SortableHeader'
 import { useIpcEvent } from '../hooks/useIpcEvent'
 import type {
   MigrationFolderInfo,
@@ -38,6 +40,23 @@ interface FileResult {
   fileSize?: number
   downloadSuccess?: boolean
   uploadSuccess?: boolean
+}
+
+type FolderSortField = 'folderName' | 'fileCount' | 'syncedCount' | 'remaining'
+
+const folderComparators: Record<FolderSortField, (a: MigrationFolderInfo, b: MigrationFolderInfo) => number> = {
+  folderName: (a, b) => a.folderName.localeCompare(b.folderName, 'ko'),
+  fileCount: (a, b) => a.fileCount - b.fileCount,
+  syncedCount: (a, b) => a.syncedCount - b.syncedCount,
+  remaining: (a, b) => (a.fileCount - a.syncedCount) - (b.fileCount - b.syncedCount),
+}
+
+type ResultSortField = 'success' | 'fileName' | 'fileSize'
+
+const resultComparators: Record<ResultSortField, (a: FileResult, b: FileResult) => number> = {
+  success: (a, b) => Number(a.success) - Number(b.success),
+  fileName: (a, b) => a.fileName.localeCompare(b.fileName, 'ko'),
+  fileSize: (a, b) => (a.fileSize ?? 0) - (b.fileSize ?? 0),
 }
 
 const TAB_CONFIG: Record<TestTab, { label: string; icon: React.ComponentType<{ className?: string }>; description: string }> = {
@@ -167,6 +186,20 @@ export function TestPage() {
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<TestProgressEvent | null>(null)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+
+  const {
+    sorted: sortedFolders,
+    sortField: folderSortField,
+    sortOrder: folderSortOrder,
+    handleSortChange: handleFolderSortChange,
+  } = useSort(folders, 'folderName' as FolderSortField, 'asc', folderComparators)
+
+  const {
+    sorted: sortedResults,
+    sortField: resultSortField,
+    sortOrder: resultSortOrder,
+    handleSortChange: handleResultSortChange,
+  } = useSort(results, 'fileName' as ResultSortField, 'asc', resultComparators)
 
   // Listen for test progress events
   useIpcEvent('test:progress', useCallback((data: TestProgressEvent) => {
@@ -448,13 +481,21 @@ export function TestPage() {
             <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <div className="w-5" />
               <div className="w-4" />
-              <div className="flex-1">폴더명</div>
-              <div className="w-20 text-right">전체 파일</div>
-              <div className="w-20 text-right">동기화 완료</div>
-              <div className="w-20 text-right">남은 파일</div>
+              <div className="flex-1">
+                <SortableHeader field="folderName" label="폴더명" currentField={folderSortField} currentOrder={folderSortOrder} onSort={handleFolderSortChange} />
+              </div>
+              <div className="w-20 text-right">
+                <SortableHeader field="fileCount" label="전체 파일" currentField={folderSortField} currentOrder={folderSortOrder} onSort={handleFolderSortChange} className="justify-end" />
+              </div>
+              <div className="w-20 text-right">
+                <SortableHeader field="syncedCount" label="동기화 완료" currentField={folderSortField} currentOrder={folderSortOrder} onSort={handleFolderSortChange} className="justify-end" />
+              </div>
+              <div className="w-20 text-right">
+                <SortableHeader field="remaining" label="남은 파일" currentField={folderSortField} currentOrder={folderSortOrder} onSort={handleFolderSortChange} className="justify-end" />
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {folders.map((folder) => (
+              {sortedFolders.map((folder) => (
                 <FolderTreeRow
                   key={folder.id}
                   folder={folder}
@@ -526,19 +567,27 @@ export function TestPage() {
           {/* Result log */}
           <div className="flex-1 min-h-0 rounded-lg border border-border bg-card overflow-hidden flex flex-col">
             <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
-              <div className="w-5">결과</div>
-              <div className="flex-1">파일명</div>
+              <div className="w-5">
+                <SortableHeader field="success" label="결과" currentField={resultSortField} currentOrder={resultSortOrder} onSort={handleResultSortChange} />
+              </div>
+              <div className="flex-1">
+                <SortableHeader field="fileName" label="파일명" currentField={resultSortField} currentOrder={resultSortOrder} onSort={handleResultSortChange} />
+              </div>
               {tab === 'full-sync' && (
                 <>
                   <div className="w-16 text-center">다운로드</div>
                   <div className="w-16 text-center">업로드</div>
                 </>
               )}
-              {tab === 'download' && <div className="w-24 text-right">파일 크기</div>}
+              {tab === 'download' && (
+                <div className="w-24 text-right">
+                  <SortableHeader field="fileSize" label="파일 크기" currentField={resultSortField} currentOrder={resultSortOrder} onSort={handleResultSortChange} className="justify-end" />
+                </div>
+              )}
               <div className="flex-1 text-right">상세</div>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {results.map((r, idx) => (
+              {sortedResults.map((r, idx) => (
                 <div
                   key={r.fileId || idx}
                   className="flex items-center gap-3 px-4 py-2 border-b border-border/50 text-sm"

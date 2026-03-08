@@ -11,9 +11,21 @@ import {
   Bug,
 } from 'lucide-react'
 import { cn, formatTime } from '../lib/utils'
+import { useSort } from '../hooks/useSort'
+import { SortableHeader } from '../components/SortableHeader'
 import { useLogStore } from '../stores/log-store'
 import type { LogEntry } from '../../shared/ipc-types'
 import type { LogLevel } from '../../core/types/logger.types'
+
+type LogSortField = 'timestamp' | 'level' | 'message'
+
+const LEVEL_ORDER: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 }
+
+const logComparators: Record<LogSortField, (a: LogEntry, b: LogEntry) => number> = {
+  timestamp: (a, b) => a.timestamp.localeCompare(b.timestamp),
+  level: (a, b) => (LEVEL_ORDER[a.level] ?? 0) - (LEVEL_ORDER[b.level] ?? 0),
+  message: (a, b) => a.message.localeCompare(b.message, 'ko'),
+}
 
 // ── Level config ──
 
@@ -418,6 +430,13 @@ export function LogViewerPage() {
   const { logs, isLoading, fetchLogs } = useLogStore()
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
+  const {
+    sorted: sortedLogs,
+    sortField: logSortField,
+    sortOrder: logSortOrder,
+    handleSortChange: handleLogSortChange,
+  } = useSort(logs, 'timestamp' as LogSortField, 'desc', logComparators)
+
   useEffect(() => {
     fetchLogs()
   }, [fetchLogs])
@@ -467,18 +486,18 @@ export function LogViewerPage() {
                 <tr>
                   <th className="px-3 py-2 text-left text-[11px] font-medium text-muted-foreground w-8" />
                   <th className="px-3 py-2 text-left text-[11px] font-medium text-muted-foreground whitespace-nowrap">
-                    시간
+                    <SortableHeader field="timestamp" label="시간" currentField={logSortField} currentOrder={logSortOrder} onSort={handleLogSortChange} />
                   </th>
                   <th className="px-3 py-2 text-left text-[11px] font-medium text-muted-foreground whitespace-nowrap">
-                    레벨
+                    <SortableHeader field="level" label="레벨" currentField={logSortField} currentOrder={logSortOrder} onSort={handleLogSortChange} />
                   </th>
                   <th className="px-3 py-2 text-left text-[11px] font-medium text-muted-foreground">
-                    메시지
+                    <SortableHeader field="message" label="메시지" currentField={logSortField} currentOrder={logSortOrder} onSort={handleLogSortChange} />
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {logs.map((entry) => (
+                {sortedLogs.map((entry) => (
                   <LogRow
                     key={entry.id}
                     entry={entry}
