@@ -443,6 +443,80 @@ describe('SyncEngine', () => {
       expect(lguplus.getAllFilesDeep).toHaveBeenCalledWith(1001)
     })
 
+    it('기존 파일의 updatedAt이 변경되면 재동기화한다', async () => {
+      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트업체', enabled: true },
+      ])
+
+      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          itemId: 100,
+          itemName: 'updated.dxf',
+          itemSize: 2048,
+          itemExtension: 'dxf',
+          parentFolderId: 1001,
+          updatedAt: '2026-03-08 15:00:00',
+          isFolder: false,
+        },
+      ])
+
+      // 기존 파일 레코드: 이전 updatedAt으로 completed 상태
+      ;(state.getFileByHistoryNo as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'existing-file',
+        status: 'completed',
+        lguplus_updated_at: '2026-03-01 10:00:00',
+      })
+
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => ({
+        id,
+        folder_id: 'f1',
+        file_name: 'updated.dxf',
+        file_path: '/테스트업체/updated.dxf',
+        file_size: 2048,
+        status: 'detected',
+        lguplus_file_id: '100',
+      }))
+
+      const result = await engine.fullSync()
+
+      // 기존 completed 파일이지만 updatedAt이 다르므로 status를 리셋하고 재동기화
+      expect(state.updateFileStatus).toHaveBeenCalledWith(
+        'existing-file',
+        'detected',
+        expect.objectContaining({ lguplus_updated_at: '2026-03-08 15:00:00' }),
+      )
+      expect(result.newFiles).toBe(1)
+    })
+
+    it('기존 파일의 updatedAt이 동일하면 스킵한다', async () => {
+      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트업체', enabled: true },
+      ])
+
+      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          itemId: 100,
+          itemName: 'same.dxf',
+          itemSize: 1024,
+          itemExtension: 'dxf',
+          parentFolderId: 1001,
+          updatedAt: '2026-03-01 10:00:00',
+          isFolder: false,
+        },
+      ])
+
+      ;(state.getFileByHistoryNo as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'existing-file',
+        status: 'completed',
+        lguplus_updated_at: '2026-03-01 10:00:00',
+      })
+
+      const result = await engine.fullSync()
+
+      expect(state.saveFile).not.toHaveBeenCalled()
+      expect(result.newFiles).toBe(0)
+    })
+
     it('하위 폴더 파일의 file_path에 relativePath가 반영된다', async () => {
       ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
         { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트업체', enabled: true },

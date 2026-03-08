@@ -126,9 +126,25 @@ export class SyncEngine implements ISyncEngine {
           for (const file of files) {
             // Check if already synced
             const existing = this.deps.state.getFileByHistoryNo(file.itemId)
+
             if (existing && existing.status === 'completed' && !options?.forceRescan) {
+              // Compare updatedAt for freshness check
+              if (existing.lguplus_updated_at === file.updatedAt) {
+                continue // Up-to-date → skip
+              }
+              // updatedAt changed → reset status and re-sync
+              this.deps.state.updateFileStatus(existing.id, 'detected', {
+                lguplus_updated_at: file.updatedAt,
+              })
+              newFiles++
+              const result = await this.syncFile(existing.id)
+              if (result.success) syncedFiles++
+              else failedFiles++
               continue
             }
+
+            // In-progress file → skip
+            if (existing) continue
 
             newFiles++
 
@@ -141,6 +157,7 @@ export class SyncEngine implements ISyncEngine {
               file_size: file.itemSize,
               file_extension: file.itemExtension,
               lguplus_file_id: String(file.itemId),
+              lguplus_updated_at: file.updatedAt,
               detected_at: new Date().toISOString(),
             })
 
