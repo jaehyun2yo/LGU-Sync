@@ -72,76 +72,46 @@ export class FolderDiscovery {
 
     result.total = subFolders.length
 
-    // Step 3: Process each folder
+    // Step 3: 기존 폴더 / 새 폴더 분리
+    const newEntries: LGUplusFolderItem[] = []
+
     for (const folder of subFolders) {
-      try {
-        const lguplusFolderId = String(folder.folderId)
-        const existing = this.state.getFolderByLguplusId(lguplusFolderId)
+      const lguplusFolderId = String(folder.folderId)
+      const existing = this.state.getFolderByLguplusId(lguplusFolderId)
 
-        if (existing) {
-          // Update name if changed
-          if (existing.lguplus_folder_name !== folder.folderName) {
-            this.state.updateFolder(existing.id, {
-              lguplus_folder_name: folder.folderName,
-              company_name: folder.folderName,
-            })
-          }
-
-          result.existingFolders++
-          result.folders.push({
-            id: existing.id,
-            lguplusFolderId,
-            folderName: folder.folderName,
-            isNew: false,
+      if (existing) {
+        if (existing.lguplus_folder_name !== folder.folderName) {
+          this.state.updateFolder(existing.id, {
+            lguplus_folder_name: folder.folderName,
+            company_name: folder.folderName,
           })
-          continue
         }
 
-        // New folder: ensure self-webhard folder path
-        let selfWebhardPath: string | null = null
-        try {
-          const ensureResult = await this.uploader.ensureFolderPath([
-            '올리기전용',
-            folder.folderName,
-          ])
-          if (ensureResult.success && ensureResult.data) {
-            selfWebhardPath = ensureResult.data
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to create self-webhard folder for ${folder.folderName}`,
-            { error: (error as Error).message },
-          )
-        }
-
-        // Save new folder to DB
-        const id = this.state.saveFolder({
-          lguplus_folder_id: lguplusFolderId,
-          lguplus_folder_name: folder.folderName,
-          lguplus_folder_path: `/올리기전용/${folder.folderName}`,
-          self_webhard_path: selfWebhardPath,
-          company_name: folder.folderName,
-          enabled: true,
-          auto_detected: true,
-        })
-
-        result.newFolders++
+        result.existingFolders++
         result.folders.push({
-          id,
+          id: existing.id,
           lguplusFolderId,
           folderName: folder.folderName,
-          isNew: true,
+          isNew: false,
         })
+      } else {
+        newEntries.push(folder)
+      }
+    }
 
-        this.logger.info(`Discovered new folder: ${folder.folderName}`, {
-          lguplusFolderId,
-          selfWebhardPath,
-        })
-      } catch (error) {
-        this.logger.error(
-          `Failed to process folder ${folder.folderName}`,
-          error as Error,
-        )
+    // Step 4: 새 폴더들은 병렬 처리 (concurrency=3)
+    const CONCURRENCY = 3
+    for (let i = 0; i < newEntries.length; i += CONCURRENCY) {
+      const batch = newEntries.slice(i, i + CONCURRENCY)
+      const batchResults = await Promise.allSettled(
+        batch.map((folder) => this.processNewFolder(folder)),
+      )
+
+      for (const batchResult of batchResults) {
+        if (batchResult.status === 'fulfilled' && batchResult.value) {
+          result.newFolders++
+          result.folders.push(batchResult.value)
+        }
       }
     }
 
@@ -152,5 +122,44 @@ export class FolderDiscovery {
     })
 
     return result
+  }
+
+  private async processNewFolder(
+    folder: LGUplusFolderItem,
+  ): Promise<{ id: string; lguplusFolderId: string; folderName: string; isNew: boolean }> {
+    const lguplusFolderId = String(folder.folderId)
+
+    let selfWebhardPath: string | null = null
+    try {
+      const ensureResult = await this.uploader.ensureFolderPath([
+        '올리기전용',
+        folder.folderName,
+      ])
+      if (ensureResult.success && ensureResult.data) {
+        selfWebhardPath = ensureResult.data
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to create self-webhard folder for ${folder.folderName}`,
+        { error: (error as Error).message },
+      )
+    }
+
+    const id = this.state.saveFolder({
+      lguplus_folder_id: lguplusFolderId,
+      lguplus_folder_name: folder.folderName,
+      lguplus_folder_path: `/올리기전용/${folder.folderName}`,
+      self_webhard_path: selfWebhardPath,
+      company_name: folder.folderName,
+      enabled: true,
+      auto_detected: true,
+    })
+
+    this.logger.info(`Discovered new folder: ${folder.folderName}`, {
+      lguplusFolderId,
+      selfWebhardPath,
+    })
+
+    return { id, lguplusFolderId, folderName: folder.folderName, isNew: true }
   }
 }
