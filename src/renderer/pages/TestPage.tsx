@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import {
   FlaskConical,
   Search,
@@ -13,6 +13,8 @@ import {
   Download,
   Upload,
   RefreshCw,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { useIpcEvent } from '../hooks/useIpcEvent'
@@ -44,6 +46,117 @@ const TAB_CONFIG: Record<TestTab, { label: string; icon: React.ComponentType<{ c
   'full-sync': { label: '전체 동기화', icon: RefreshCw, description: '다운로드 + 업로드를 순차적으로 실행합니다.' },
 }
 
+// Collect all IDs from a folder tree (including descendants)
+function collectAllIds(folders: MigrationFolderInfo[]): string[] {
+  const ids: string[] = []
+  for (const f of folders) {
+    ids.push(f.id)
+    if (f.children) ids.push(...collectAllIds(f.children))
+  }
+  return ids
+}
+
+// Collect descendant IDs (not including the folder itself)
+function collectDescendantIds(folder: MigrationFolderInfo): string[] {
+  const ids: string[] = []
+  if (folder.children) {
+    for (const child of folder.children) {
+      ids.push(child.id)
+      ids.push(...collectDescendantIds(child))
+    }
+  }
+  return ids
+}
+
+// FolderTreeRow: recursive tree row component
+function FolderTreeRow({
+  folder,
+  depth,
+  selectedIds,
+  expandedIds,
+  onToggleSelect,
+  onToggleExpand,
+}: {
+  folder: MigrationFolderInfo
+  depth: number
+  selectedIds: Set<string>
+  expandedIds: Set<string>
+  onToggleSelect: (id: string, descendantIds: string[]) => void
+  onToggleExpand: (id: string) => void
+}) {
+  const isSelected = selectedIds.has(folder.id)
+  const isExpanded = expandedIds.has(folder.id)
+  const hasChildren = folder.children && folder.children.length > 0
+  const remaining = folder.fileCount - folder.syncedCount
+
+  return (
+    <>
+      <div
+        className={cn(
+          'flex items-center gap-3 px-4 py-2.5 border-b border-border/50 transition-colors cursor-pointer',
+          'hover:bg-accent/50',
+          !isSelected && 'opacity-60',
+        )}
+        style={{ paddingLeft: `${depth * 16 + 16}px` }}
+        onClick={() => onToggleSelect(folder.id, collectDescendantIds(folder))}
+      >
+        {/* Expand/collapse toggle */}
+        <button
+          type="button"
+          className="shrink-0 w-4 h-4 flex items-center justify-center"
+          onClick={(e) => {
+            e.stopPropagation()
+            if (hasChildren) onToggleExpand(folder.id)
+          }}
+        >
+          {hasChildren ? (
+            isExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+            )
+          ) : null}
+        </button>
+
+        {/* Checkbox */}
+        <button
+          type="button"
+          className={cn(
+            'shrink-0 h-5 w-5 rounded border-2 transition-colors flex items-center justify-center',
+            isSelected ? 'bg-primary border-primary' : 'border-border hover:border-muted-foreground',
+          )}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {isSelected && <Check className="h-3 w-3 text-primary-foreground" />}
+        </button>
+
+        <Folder className={cn('h-4 w-4 shrink-0', isSelected ? 'text-warning' : 'text-muted-foreground')} />
+        <span className="flex-1 min-w-0 truncate text-sm font-medium">{folder.folderName}</span>
+        <span className="shrink-0 w-20 text-xs text-muted-foreground text-right tabular-nums">
+          {folder.fileCount.toLocaleString('ko-KR')}
+        </span>
+        <span className="shrink-0 w-20 text-xs text-success text-right tabular-nums">
+          {folder.syncedCount.toLocaleString('ko-KR')}
+        </span>
+        <span className={cn('shrink-0 w-20 text-xs text-right tabular-nums', remaining > 0 ? 'text-warning' : 'text-muted-foreground')}>
+          {remaining.toLocaleString('ko-KR')}
+        </span>
+      </div>
+      {isExpanded && folder.children?.map((child) => (
+        <FolderTreeRow
+          key={child.id}
+          folder={child}
+          depth={depth + 1}
+          selectedIds={selectedIds}
+          expandedIds={expandedIds}
+          onToggleSelect={onToggleSelect}
+          onToggleExpand={onToggleExpand}
+        />
+      ))}
+    </>
+  )
+}
+
 export function TestPage() {
   const [tab, setTab] = useState<TestTab>('download')
   const [state, setState] = useState<TestState>('idle')
@@ -53,6 +166,7 @@ export function TestPage() {
   const [summary, setSummary] = useState<{ success: number; failed: number; durationMs: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<TestProgressEvent | null>(null)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
 
   // Listen for test progress events
   useIpcEvent('test:progress', useCallback((data: TestProgressEvent) => {
@@ -78,7 +192,9 @@ export function TestPage() {
       const res = await window.electronAPI.invoke('test:scan-folders')
       if (res.success && res.data) {
         setFolders(res.data)
-        setSelectedIds(new Set(res.data.map((f) => f.id)))
+        const allIds = collectAllIds(res.data)
+        setSelectedIds(new Set(allIds))
+        setExpandedIds(new Set(res.data.map((f) => f.id)))
         setState('selecting')
       } else {
         setError(res.error?.message ?? '스캔 실패')
@@ -90,22 +206,28 @@ export function TestPage() {
     }
   }, [])
 
-  const toggleFolder = useCallback((id: string) => {
+  const toggleFolder = useCallback((id: string, descendantIds: string[]) => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      const allIds = [id, ...descendantIds]
+      if (next.has(id)) {
+        for (const i of allIds) next.delete(i)
+      } else {
+        for (const i of allIds) next.add(i)
+      }
       return next
     })
   }, [])
 
+  const allFolderIds = useMemo(() => collectAllIds(folders), [folders])
+
   const toggleAll = useCallback(() => {
-    if (selectedIds.size === folders.length) {
+    if (selectedIds.size === allFolderIds.length) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(folders.map((f) => f.id)))
+      setSelectedIds(new Set(allFolderIds))
     }
-  }, [selectedIds.size, folders])
+  }, [selectedIds.size, allFolderIds])
 
   // Run test
   const handleStart = useCallback(async () => {
@@ -186,8 +308,26 @@ export function TestPage() {
     setProgress(null)
   }, [])
 
-  const selectedFolders = folders.filter((f) => selectedIds.has(f.id))
-  const selectedFiles = selectedFolders.reduce((sum, f) => sum + f.fileCount, 0)
+  const toggleExpand = useCallback((id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const selectedFiles = useMemo(() => {
+    let count = 0
+    function countFiles(list: MigrationFolderInfo[]) {
+      for (const f of list) {
+        if (selectedIds.has(f.id)) count += f.fileCount
+        if (f.children) countFiles(f.children)
+      }
+    }
+    countFiles(folders)
+    return count
+  }, [folders, selectedIds])
 
   return (
     <div className="flex flex-col h-full gap-4">
@@ -267,12 +407,12 @@ export function TestPage() {
                 className="inline-flex items-center gap-2 px-3 py-1.5 text-xs rounded border border-border hover:bg-accent transition-colors"
                 onClick={toggleAll}
               >
-                {selectedIds.size === folders.length ? (
+                {selectedIds.size === allFolderIds.length ? (
                   <CheckSquare className="h-3.5 w-3.5" />
                 ) : (
                   <Square className="h-3.5 w-3.5" />
                 )}
-                {selectedIds.size === folders.length ? '전체 해제' : '전체 선택'}
+                {selectedIds.size === allFolderIds.length ? '전체 해제' : '전체 선택'}
               </button>
               <span className="text-xs text-muted-foreground">
                 {selectedIds.size}개 폴더 선택됨 ({selectedFiles.toLocaleString('ko-KR')}개 파일)
@@ -314,42 +454,17 @@ export function TestPage() {
               <div className="w-20 text-right">남은 파일</div>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {folders.map((folder) => {
-                const isSelected = selectedIds.has(folder.id)
-                const remaining = folder.fileCount - folder.syncedCount
-                return (
-                  <div
-                    key={folder.id}
-                    className={cn(
-                      'flex items-center gap-3 px-4 py-3 border-b border-border/50 transition-colors cursor-pointer',
-                      'hover:bg-accent/50',
-                      !isSelected && 'opacity-60',
-                    )}
-                    onClick={() => toggleFolder(folder.id)}
-                  >
-                    <button
-                      type="button"
-                      className={cn(
-                        'shrink-0 h-5 w-5 rounded border-2 transition-colors flex items-center justify-center',
-                        isSelected ? 'bg-primary border-primary' : 'border-border hover:border-muted-foreground',
-                      )}
-                    >
-                      {isSelected && <Check className="h-3 w-3 text-primary-foreground" />}
-                    </button>
-                    <Folder className={cn('h-4 w-4 shrink-0', isSelected ? 'text-warning' : 'text-muted-foreground')} />
-                    <span className="flex-1 min-w-0 truncate text-sm font-medium">{folder.folderName}</span>
-                    <span className="shrink-0 w-20 text-xs text-muted-foreground text-right tabular-nums">
-                      {folder.fileCount.toLocaleString('ko-KR')}
-                    </span>
-                    <span className="shrink-0 w-20 text-xs text-success text-right tabular-nums">
-                      {folder.syncedCount.toLocaleString('ko-KR')}
-                    </span>
-                    <span className={cn('shrink-0 w-20 text-xs text-right tabular-nums', remaining > 0 ? 'text-warning' : 'text-muted-foreground')}>
-                      {remaining.toLocaleString('ko-KR')}
-                    </span>
-                  </div>
-                )
-              })}
+              {folders.map((folder) => (
+                <FolderTreeRow
+                  key={folder.id}
+                  folder={folder}
+                  depth={0}
+                  selectedIds={selectedIds}
+                  expandedIds={expandedIds}
+                  onToggleSelect={toggleFolder}
+                  onToggleExpand={toggleExpand}
+                />
+              ))}
             </div>
           </div>
         </>

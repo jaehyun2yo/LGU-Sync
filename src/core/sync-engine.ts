@@ -193,11 +193,17 @@ export class SyncEngine implements ISyncEngine {
         ? Number(file.lguplus_file_id)
         : file.history_no ?? 0
 
+      const segments = this.getPathSegments(file.file_path)
+      const subPath = segments.join('/')
+      const destPath = subPath
+        ? `${this.getTempPath()}/${subPath}/${file.file_name}`
+        : `${this.getTempPath()}/${file.file_name}`
+
       const downloadResult = await this.deps.retry.execute(
         () =>
           this.deps.lguplus.downloadFile(
             lguplusFileId,
-            `${this.getTempPath()}/${file.file_name}`,
+            destPath,
           ),
         { maxRetries: 3, baseDelayMs: 1000, circuitName: 'lguplus-download' },
       )
@@ -212,7 +218,7 @@ export class SyncEngine implements ISyncEngine {
 
       this.deps.state.updateFileStatus(fileId, 'downloaded', {
         download_completed_at: new Date().toISOString(),
-        download_path: `${this.getTempPath()}/${file.file_name}`,
+        download_path: destPath,
       })
 
       this.logger.info(`File downloaded: ${file.file_name}`, { fileId })
@@ -254,16 +260,28 @@ export class SyncEngine implements ISyncEngine {
         fileSize: file.file_size,
       })
 
-      let uploadFolderId = this.deps.state.getFolder(file.folder_id)?.self_webhard_path
-      if (!uploadFolderId) {
-        const folder = this.deps.state.getFolder(file.folder_id)
-        if (folder) {
-          const ensureResult = await this.deps.uploader.ensureFolderPath([
-            folder.lguplus_folder_name,
-          ])
-          if (ensureResult.success && ensureResult.data) {
-            uploadFolderId = ensureResult.data
-            this.deps.state.updateFolder(folder.id, { self_webhard_path: uploadFolderId })
+      // Build upload folder path from file_path segments (preserves sub-folder structure)
+      const pathSegments = this.getPathSegments(file.file_path)
+      let uploadFolderId: string | undefined | null
+
+      if (pathSegments.length > 0) {
+        const ensureResult = await this.deps.uploader.ensureFolderPath(pathSegments)
+        if (ensureResult.success && ensureResult.data) {
+          uploadFolderId = ensureResult.data
+        }
+      } else {
+        // Fallback: use cached folder path or create from folder name
+        uploadFolderId = this.deps.state.getFolder(file.folder_id)?.self_webhard_path
+        if (!uploadFolderId) {
+          const folder = this.deps.state.getFolder(file.folder_id)
+          if (folder) {
+            const ensureResult = await this.deps.uploader.ensureFolderPath([
+              folder.lguplus_folder_name,
+            ])
+            if (ensureResult.success && ensureResult.data) {
+              uploadFolderId = ensureResult.data
+              this.deps.state.updateFolder(folder.id, { self_webhard_path: uploadFolderId })
+            }
           }
         }
       }
@@ -375,6 +393,11 @@ export class SyncEngine implements ISyncEngine {
         this.logger.error(`Failed to sync detected file ${fileId}`, error as Error)
       })
     }
+  }
+
+  private getPathSegments(filePath: string): string[] {
+    const parts = filePath.split('/').filter(Boolean)
+    return parts.slice(0, -1) // exclude filename
   }
 
   private getTempPath(): string {
