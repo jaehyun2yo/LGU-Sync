@@ -47,9 +47,11 @@ export function createCoreServices(options: CoreOptions): CoreServices {
     onLog: (entry) => {
       // Persist logs to StateManager after initialization
       try {
+        const category = entry.context?.module as string | undefined
         state.addLog({
           level: entry.level,
           message: entry.message,
+          category: category ?? 'general',
           context: JSON.stringify(entry.context),
         })
       } catch {

@@ -43,6 +43,7 @@ function mockLGUplusClient(): ILGUplusClient {
     findFolderByName: vi.fn().mockResolvedValue(null),
     getFileList: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     getAllFiles: vi.fn().mockResolvedValue([]),
+    getAllFilesDeep: vi.fn().mockResolvedValue([]),
     getDownloadUrlInfo: vi.fn().mockResolvedValue(null),
     downloadFile: vi.fn().mockResolvedValue({ success: true, size: 1024, filename: 'test.dxf' }),
     batchDownload: vi.fn().mockResolvedValue({ success: 0, failed: 0, totalSize: 0, failedFiles: [] }),
@@ -76,9 +77,14 @@ function mockStateManager(): IStateManager {
       files.set(id, { ...file, id, status: 'detected' })
       return id
     }),
-    updateFileStatus: vi.fn().mockImplementation((id, status) => {
+    updateFileStatus: vi.fn().mockImplementation((id, status, extra) => {
       const file = files.get(id)
-      if (file) file.status = status
+      if (file) {
+        file.status = status
+        if (extra && typeof extra === 'object') {
+          Object.assign(file, extra)
+        }
+      }
     }),
     getFile: vi.fn().mockImplementation((id) => files.get(id) ?? null),
     getFilesByFolder: vi.fn().mockReturnValue([]),
@@ -240,7 +246,7 @@ describe('SyncEngine', () => {
         detected_at: new Date().toISOString(),
       })
 
-      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+      const fileData = {
         id: fileId,
         folder_id: 'f1',
         file_name: 'test.dxf',
@@ -249,6 +255,14 @@ describe('SyncEngine', () => {
         status: 'detected',
         history_no: 101,
         lguplus_file_id: '5001',
+      }
+
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileData }))
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation((_id, status, extra) => {
+        fileData.status = status
+        if (extra && typeof extra === 'object') {
+          Object.assign(fileData, extra)
+        }
       })
 
       ;(state.getFolder as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -285,6 +299,53 @@ describe('SyncEngine', () => {
       const result = await engine.fullSync()
       expect(result).toBeTruthy()
       expect(result.durationMs).toBeGreaterThanOrEqual(0)
+    })
+
+    it('getAllFilesDeep()를 호출하여 깊은 폴더를 스캔한다', async () => {
+      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트업체', enabled: true },
+      ])
+
+      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { itemId: 100, itemName: 'root.dxf', itemSize: 512, itemExtension: 'dxf', parentFolderId: 1001, updatedAt: '2026-01-01', isFolder: false },
+        { itemId: 101, itemName: 'deep.dxf', itemSize: 1024, itemExtension: 'dxf', parentFolderId: 2001, updatedAt: '2026-01-01', isFolder: false, relativePath: '2026년/Q1' },
+      ])
+
+      await engine.fullSync()
+
+      expect(lguplus.getAllFilesDeep).toHaveBeenCalledWith(1001)
+    })
+
+    it('하위 폴더 파일의 file_path에 relativePath가 반영된다', async () => {
+      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트업체', enabled: true },
+      ])
+
+      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { itemId: 100, itemName: 'root.dxf', itemSize: 512, itemExtension: 'dxf', parentFolderId: 1001, updatedAt: '2026-01-01', isFolder: false },
+        { itemId: 101, itemName: 'deep.dxf', itemSize: 1024, itemExtension: 'dxf', parentFolderId: 2001, updatedAt: '2026-01-01', isFolder: false, relativePath: '2026년/Q1' },
+      ])
+
+      // Make getFile return data so syncFile can proceed (but will fail download - that's ok for this test)
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => ({
+        id,
+        folder_id: 'f1',
+        file_name: 'test.dxf',
+        file_path: '/test.dxf',
+        file_size: 1024,
+        status: 'detected',
+        lguplus_file_id: '100',
+      }))
+
+      await engine.fullSync()
+
+      const saveFileCalls = (state.saveFile as ReturnType<typeof vi.fn>).mock.calls
+
+      // Root file: /테스트업체/root.dxf
+      expect(saveFileCalls[0][0].file_path).toBe('/테스트업체/root.dxf')
+
+      // Deep file: /테스트업체/2026년/Q1/deep.dxf
+      expect(saveFileCalls[1][0].file_path).toBe('/테스트업체/2026년/Q1/deep.dxf')
     })
   })
 })

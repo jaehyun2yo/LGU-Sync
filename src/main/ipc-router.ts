@@ -3,7 +3,8 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { CoreServices } from '../core/container'
-import type { ApiResponse, IpcEventMap } from '../shared/ipc-types'
+import type { ApiResponse, IpcEventMap, MigrationFolderInfo } from '../shared/ipc-types'
+import type { ILGUplusClient } from '../core/types/lguplus-client.types'
 import type { LogRow, LogQuery } from '../core/db/types'
 
 function ok<T>(data: T): ApiResponse<T> {
@@ -63,6 +64,31 @@ function escapeCsvField(value: string): string {
     return `"${value.replace(/"/g, '""')}"`
   }
   return value
+}
+
+async function buildSubFolderTree(
+  lguplusFolderId: number,
+  lguplusClient: ILGUplusClient,
+  depth: number = 0,
+  maxDepth: number = 5,
+): Promise<MigrationFolderInfo[]> {
+  if (depth >= maxDepth) return []
+  const subFolders = await lguplusClient.getSubFolders(lguplusFolderId)
+  return Promise.all(
+    subFolders.map(async (sf) => {
+      const files = await lguplusClient.getAllFiles(sf.folderId)
+      const fileCount = files.filter((f) => !f.isFolder).length
+      const children = await buildSubFolderTree(sf.folderId, lguplusClient, depth + 1, maxDepth)
+      return {
+        id: String(sf.folderId),
+        lguplusFolderId: String(sf.folderId),
+        folderName: sf.folderName,
+        fileCount,
+        syncedCount: 0,
+        children: children.length > 0 ? children : undefined,
+      }
+    }),
+  )
 }
 
 export function registerIpcHandlers(services: CoreServices): void {
@@ -333,14 +359,13 @@ export function registerIpcHandlers(services: CoreServices): void {
   ipcMain.handle('logs:list', async (_event, request) => {
     try {
       const { level, search, dateFrom, dateTo, page = 1, pageSize = 100 } = request ?? {}
+      const queryParams = { level, search, from: dateFrom, to: dateTo }
       const logs = state.getLogs({
-        level,
-        search,
-        from: dateFrom,
-        to: dateTo,
+        ...queryParams,
         limit: pageSize,
         offset: (page - 1) * pageSize,
       })
+      const total = state.getLogCount(queryParams)
       const items = logs.map((l) => ({
         id: l.id,
         level: l.level as 'debug' | 'info' | 'warn' | 'error',
@@ -355,9 +380,9 @@ export function registerIpcHandlers(services: CoreServices): void {
         pagination: {
           page,
           pageSize,
-          total: items.length,
-          totalPages: Math.ceil(items.length / pageSize) || 1,
-          hasNext: items.length === pageSize,
+          total,
+          totalPages: Math.ceil(total / pageSize) || 1,
+          hasNext: page * pageSize < total,
           hasPrev: page > 1,
         },
       })
@@ -557,6 +582,229 @@ export function registerIpcHandlers(services: CoreServices): void {
     }
   })
 
+  // ── Test ──
+
+  ipcMain.handle('test:scan-folders', async () => {
+    try {
+      await folderDiscovery.discoverFolders()
+      const folders = state.getFolders()
+      const result = await Promise.all(
+        folders.map(async (f) => {
+          let fileCount = 0
+          let children: MigrationFolderInfo[] | undefined
+          try {
+            const folderId = Number(f.lguplus_folder_id)
+            const files = await lguplus.getAllFiles(folderId)
+            fileCount = files.filter((file) => !file.isFolder).length
+            const subTree = await buildSubFolderTree(folderId, lguplus)
+            children = subTree.length > 0 ? subTree : undefined
+          } catch {
+            // silently fail
+          }
+          const syncedFiles = state.getFilesByFolder(f.id, { status: 'completed' })
+          return {
+            id: f.id,
+            lguplusFolderId: f.lguplus_folder_id,
+            folderName: f.lguplus_folder_name,
+            fileCount,
+            syncedCount: syncedFiles.length,
+            children,
+          }
+        }),
+      )
+      return ok(result)
+    } catch (e) {
+      return fail('TEST_SCAN_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('test:download-only', async (_event, request) => {
+    try {
+      const start = Date.now()
+      const results: Array<{
+        fileId: string; fileName: string; success: boolean
+        error?: string; downloadPath?: string; fileSize: number
+      }> = []
+      let downloadedFiles = 0
+      let failedFiles = 0
+      let scannedFiles = 0
+
+      const folders = state.getFolders(true)
+      const targetFolders = request.folderIds
+        ? folders.filter((f) => request.folderIds.includes(f.id))
+        : folders
+
+      for (const folder of targetFolders) {
+        const files = await lguplus.getAllFilesDeep(Number(folder.lguplus_folder_id))
+        scannedFiles += files.length
+
+        for (const file of files) {
+          const existing = state.getFileByHistoryNo(file.itemId)
+          if (existing && existing.status === 'completed' && !request.forceRescan) {
+            continue
+          }
+
+          const fileId = state.saveFile({
+            folder_id: folder.id,
+            file_name: file.itemName,
+            file_path: `/${folder.lguplus_folder_name}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
+            file_size: file.itemSize,
+            file_extension: file.itemExtension,
+            lguplus_file_id: String(file.itemId),
+            detected_at: new Date().toISOString(),
+          })
+
+          const dlResult = await engine.downloadOnly(fileId)
+          const savedFile = state.getFile(fileId)
+          results.push({
+            fileId,
+            fileName: file.itemName,
+            success: dlResult.success,
+            error: dlResult.error,
+            downloadPath: savedFile?.download_path ?? undefined,
+            fileSize: file.itemSize,
+          })
+
+          if (dlResult.success) {
+            downloadedFiles++
+          } else {
+            failedFiles++
+          }
+        }
+      }
+
+      return ok({
+        scannedFiles,
+        downloadedFiles,
+        failedFiles,
+        durationMs: Date.now() - start,
+        results,
+      })
+    } catch (e) {
+      return fail('TEST_DOWNLOAD_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('test:upload-only', async (_event, request) => {
+    try {
+      const start = Date.now()
+      const results: Array<{
+        fileId: string; fileName: string; success: boolean; error?: string
+      }> = []
+      let uploadedFiles = 0
+      let failedFiles = 0
+
+      const folders = state.getFolders(true)
+      const targetFolders = request.folderIds
+        ? folders.filter((f) => request.folderIds.includes(f.id))
+        : folders
+
+      for (const folder of targetFolders) {
+        const downloadedFilesList = state.getFilesByFolder(folder.id, { status: 'downloaded' as any })
+        for (const file of downloadedFilesList) {
+          const ulResult = await engine.uploadOnly(file.id)
+          results.push({
+            fileId: file.id,
+            fileName: file.file_name,
+            success: ulResult.success,
+            error: ulResult.error,
+          })
+
+          if (ulResult.success) {
+            uploadedFiles++
+          } else {
+            failedFiles++
+          }
+        }
+      }
+
+      return ok({
+        uploadedFiles,
+        failedFiles,
+        durationMs: Date.now() - start,
+        results,
+      })
+    } catch (e) {
+      return fail('TEST_UPLOAD_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('test:full-sync', async (_event, request) => {
+    try {
+      const start = Date.now()
+      const results: Array<{
+        fileId: string; fileName: string
+        downloadSuccess: boolean; uploadSuccess: boolean; error?: string
+      }> = []
+      let scannedFiles = 0
+      let newFiles = 0
+      let syncedFiles = 0
+      let failedFiles = 0
+
+      const folders = state.getFolders(true)
+      const targetFolders = request.folderIds
+        ? folders.filter((f) => request.folderIds!.includes(f.id))
+        : folders
+
+      for (const folder of targetFolders) {
+        const files = await lguplus.getAllFilesDeep(Number(folder.lguplus_folder_id))
+        scannedFiles += files.length
+
+        for (const file of files) {
+          const existing = state.getFileByHistoryNo(file.itemId)
+          if (existing && existing.status === 'completed' && !request.forceRescan) {
+            continue
+          }
+
+          newFiles++
+
+          const fileId = state.saveFile({
+            folder_id: folder.id,
+            file_name: file.itemName,
+            file_path: `/${folder.lguplus_folder_name}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
+            file_size: file.itemSize,
+            file_extension: file.itemExtension,
+            lguplus_file_id: String(file.itemId),
+            detected_at: new Date().toISOString(),
+          })
+
+          const dlResult = await engine.downloadOnly(fileId)
+          if (!dlResult.success) {
+            failedFiles++
+            results.push({
+              fileId, fileName: file.itemName,
+              downloadSuccess: false, uploadSuccess: false, error: dlResult.error,
+            })
+            continue
+          }
+
+          const ulResult = await engine.uploadOnly(fileId)
+          if (ulResult.success) {
+            syncedFiles++
+          } else {
+            failedFiles++
+          }
+          results.push({
+            fileId, fileName: file.itemName,
+            downloadSuccess: true, uploadSuccess: ulResult.success,
+            error: ulResult.error,
+          })
+        }
+      }
+
+      return ok({
+        scannedFiles,
+        newFiles,
+        syncedFiles,
+        failedFiles,
+        durationMs: Date.now() - start,
+        results,
+      })
+    } catch (e) {
+      return fail('TEST_FULL_SYNC_FAILED', (e as Error).message)
+    }
+  })
+
   // ── Notifications ──
 
   ipcMain.handle('notification:getAll', async () => {
@@ -619,16 +867,27 @@ export function bridgeEventsToRenderer(
         timestamp: new Date().toISOString(),
       })
     },
-    'sync:progress': (data: { fileId: string; fileName: string; progress: number; speedBps: number }) => {
+    'sync:progress': (data: { fileId: string; fileName: string; progress: number; speedBps: number; phase: string; fileSize: number }) => {
       send('sync:progress', {
-        phase: 'downloading',
+        phase: (data.phase as 'downloading' | 'uploading') ?? 'downloading',
+        fileId: data.fileId,
         currentFile: data.fileName,
-        completedFiles: 0,
-        totalFiles: 0,
-        completedBytes: 0,
-        totalBytes: 0,
+        completedFiles: data.progress >= 100 ? 1 : 0,
+        totalFiles: 1,
+        completedBytes: Math.round((data.progress / 100) * data.fileSize),
+        totalBytes: data.fileSize,
         speedBps: data.speedBps,
         estimatedRemainingMs: 0,
+      })
+    },
+    'file:completed': (data: { fileId: string; fileName: string; fileSize: number; folderPath: string; durationMs: number }) => {
+      send('sync:file-completed', {
+        fileId: data.fileId,
+        fileName: data.fileName,
+        folderPath: data.folderPath,
+        fileSize: data.fileSize,
+        direction: 'upload',
+        durationMs: data.durationMs,
       })
     },
     'sync:completed': (data: { totalFiles: number; totalBytes: number; durationMs: number }) => {
@@ -638,7 +897,7 @@ export function bridgeEventsToRenderer(
         totalFiles: data.totalFiles,
         completedBytes: data.totalBytes,
         totalBytes: data.totalBytes,
-        speedBps: data.totalBytes / (data.durationMs / 1000),
+        speedBps: data.durationMs > 0 ? data.totalBytes / (data.durationMs / 1000) : 0,
         estimatedRemainingMs: 0,
       })
     },
@@ -694,6 +953,32 @@ function buildSyncStatus(services: CoreServices) {
   const stats = state.getDailyStats(today, today)
   const todayStats = stats[0]
 
+  // Get recent completed files across all folders
+  const folders = state.getFolders()
+  const recentFiles: Array<{ id: string; fileName: string; folderPath: string; fileSize: number; status: string; syncedAt?: string }> = []
+  for (const folder of folders) {
+    const files = state.getFilesByFolder(folder.id, {
+      status: 'completed',
+      sortBy: 'updated_at',
+      sortOrder: 'desc',
+      limit: 5,
+    })
+    for (const f of files) {
+      recentFiles.push({
+        id: f.id,
+        fileName: f.file_name,
+        folderPath: f.file_path,
+        fileSize: f.file_size,
+        status: f.status,
+        syncedAt: f.upload_completed_at ?? undefined,
+      })
+    }
+    if (recentFiles.length >= 10) break
+  }
+  // Sort by syncedAt descending and take top 10
+  recentFiles.sort((a, b) => (b.syncedAt ?? '').localeCompare(a.syncedAt ?? ''))
+  const topRecentFiles = recentFiles.slice(0, 10)
+
   return {
     state: engine.status,
     lguplus: {
@@ -709,7 +994,7 @@ function buildSyncStatus(services: CoreServices) {
       failedFiles: todayStats?.failed_count ?? 0,
       totalBytes: todayStats?.total_bytes ?? 0,
     },
-    recentFiles: [],
+    recentFiles: topRecentFiles,
     failedCount: state.getDlqItems().length,
     lastUpdatedAt: new Date().toISOString(),
   }
@@ -734,6 +1019,7 @@ export function removeAllIpcHandlers(): void {
     'files:list', 'files:detail', 'files:search',
     'folders:list', 'folders:tree', 'folders:toggle', 'folders:discover',
     'migration:scan', 'migration:start',
+    'test:scan-folders', 'test:download-only', 'test:upload-only', 'test:full-sync',
     'logs:list', 'logs:export',
     'stats:summary', 'stats:chart',
     'settings:get', 'settings:update', 'settings:test-connection',

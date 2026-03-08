@@ -7,6 +7,7 @@ export type PageId =
   | 'sync-log'
   | 'statistics'
   | 'migration'
+  | 'test'
   | 'settings'
 
 interface UiState {

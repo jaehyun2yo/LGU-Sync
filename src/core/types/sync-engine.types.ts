@@ -30,4 +30,6 @@ export interface ISyncEngine {
   resume(): Promise<void>
   fullSync(options?: FullSyncOptions): Promise<FullSyncResult>
   syncFile(fileId: string): Promise<SyncResult>
+  downloadOnly(fileId: string): Promise<SyncResult>
+  uploadOnly(fileId: string): Promise<SyncResult>
 }

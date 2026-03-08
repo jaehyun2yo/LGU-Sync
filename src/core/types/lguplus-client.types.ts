@@ -21,6 +21,7 @@ export interface LGUplusFileItem {
   parentFolderId: number
   updatedAt: string
   isFolder: boolean
+  relativePath?: string
 }
 
 export interface UploadHistoryItem {
@@ -80,6 +81,13 @@ export interface ILGUplusClient {
   getAllFiles(
     folderId: number,
     onProgress?: (page: number, fetched: number, total: number) => void,
+  ): Promise<LGUplusFileItem[]>
+  getAllFilesDeep(
+    folderId: number,
+    options?: {
+      maxDepth?: number
+      concurrency?: number
+    },
   ): Promise<LGUplusFileItem[]>
 
   // Download

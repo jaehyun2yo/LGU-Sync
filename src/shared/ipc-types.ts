@@ -277,6 +277,7 @@ export interface MigrationFolderInfo {
   folderName: string
   fileCount: number
   syncedCount: number
+  children?: MigrationFolderInfo[]
 }
 
 export interface MigrationStartRequest {
@@ -315,6 +316,63 @@ export interface FailedEvent {
   failedAt: string
   retryCount: number
   canRetry: boolean
+}
+
+// ── Test types ──
+
+export interface TestDownloadRequest {
+  folderIds: string[]
+  forceRescan?: boolean
+}
+
+export interface TestDownloadResult {
+  scannedFiles: number
+  downloadedFiles: number
+  failedFiles: number
+  durationMs: number
+  results: Array<{
+    fileId: string
+    fileName: string
+    success: boolean
+    error?: string
+    downloadPath?: string
+    fileSize: number
+  }>
+}
+
+export interface TestUploadRequest {
+  folderIds: string[]
+}
+
+export interface TestUploadResult {
+  uploadedFiles: number
+  failedFiles: number
+  durationMs: number
+  results: Array<{
+    fileId: string
+    fileName: string
+    success: boolean
+    error?: string
+  }>
+}
+
+export interface TestFullSyncResult extends FullSyncResult {
+  results: Array<{
+    fileId: string
+    fileName: string
+    downloadSuccess: boolean
+    uploadSuccess: boolean
+    error?: string
+  }>
+}
+
+export interface TestProgressEvent {
+  testType: 'download' | 'upload' | 'full-sync'
+  currentFile: string
+  completedFiles: number
+  totalFiles: number
+  phase: 'scanning' | 'downloading' | 'uploading'
+  error?: string
 }
 
 // ── IPC Channel Map (invoke/handle) ──
@@ -371,6 +429,12 @@ export interface IpcChannelMap {
   'auth:logout': { request: void; response: ApiResponse<void> }
   'auth:status': { request: void; response: ApiResponse<AuthStatus> }
 
+  // Test
+  'test:scan-folders': { request: void; response: ApiResponse<MigrationFolderInfo[]> }
+  'test:download-only': { request: TestDownloadRequest; response: ApiResponse<TestDownloadResult> }
+  'test:upload-only': { request: TestUploadRequest; response: ApiResponse<TestUploadResult> }
+  'test:full-sync': { request: FullSyncRequest; response: ApiResponse<TestFullSyncResult> }
+
   // Failed / DLQ
   'failed:list': { request: PaginationRequest; response: ApiResponse<Paginated<FailedEvent>> }
 
@@ -384,6 +448,7 @@ export interface IpcChannelMap {
 
 export interface SyncProgressEvent {
   phase: 'scanning' | 'comparing' | 'downloading' | 'uploading'
+  fileId?: string
   currentFile?: string
   completedFiles: number
   totalFiles: number
@@ -450,6 +515,7 @@ export interface IpcEventMap {
   'detection:new-files': NewFilesEvent
   'auth:expired': AuthExpiredEvent
   'error:critical': CriticalErrorEvent
+  'test:progress': TestProgressEvent
 }
 
 // ── ElectronAPI (exposed via contextBridge) ──

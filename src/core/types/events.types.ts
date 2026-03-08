@@ -23,6 +23,15 @@ export interface EventMap {
     fileName: string
     progress: number
     speedBps: number
+    phase: 'downloading' | 'uploading'
+    fileSize: number
+  }
+  'file:completed': {
+    fileId: string
+    fileName: string
+    fileSize: number
+    folderPath: string
+    durationMs: number
   }
   'detection:found': { files: DetectedFile[]; strategy: DetectionStrategy }
   'session:expired': { reason: string }
