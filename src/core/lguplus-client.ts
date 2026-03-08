@@ -423,17 +423,35 @@ export class LGUplusClient implements ILGUplusClient {
     folderId: number,
     onProgress?: (page: number, fetched: number, total: number) => void,
   ): Promise<LGUplusFileItem[]> {
-    const allFiles: LGUplusFileItem[] = []
-    let page = 1
-    let total = 0
+    // 첫 페이지로 total 파악
+    const firstPage = await this.getFileList(folderId, { page: 1 })
+    const allFiles = [...firstPage.items]
+    const total = firstPage.total
+    const pageSize = firstPage.items.length || 20
 
-    do {
-      const result = await this.getFileList(folderId, { page })
-      allFiles.push(...result.items)
-      total = result.total
-      onProgress?.(page, allFiles.length, total)
-      page++
-    } while (allFiles.length < total)
+    onProgress?.(1, allFiles.length, total)
+
+    if (allFiles.length >= total) return allFiles
+
+    // 남은 페이지 수 계산 → 병렬 fetch
+    const totalPages = Math.ceil(total / pageSize)
+    const remainingPages = Array.from(
+      { length: totalPages - 1 },
+      (_, i) => i + 2,
+    )
+
+    // 병렬 batch (한 번에 5페이지씩)
+    const BATCH_SIZE = 5
+    for (let i = 0; i < remainingPages.length; i += BATCH_SIZE) {
+      const batch = remainingPages.slice(i, i + BATCH_SIZE)
+      const results = await Promise.all(
+        batch.map((page) => this.getFileList(folderId, { page })),
+      )
+      for (const result of results) {
+        allFiles.push(...result.items)
+      }
+      onProgress?.(batch[batch.length - 1], allFiles.length, total)
+    }
 
     return allFiles
   }

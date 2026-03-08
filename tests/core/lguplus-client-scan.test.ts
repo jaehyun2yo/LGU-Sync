@@ -116,3 +116,55 @@ describe('getAllFilesDeep - worker pool BFS', () => {
     expect(Math.abs(filesStart - subStart)).toBeLessThan(10)
   })
 })
+
+describe('getAllFiles - 병렬 페이지네이션', () => {
+  let client: LGUplusClient
+
+  beforeEach(() => {
+    client = new LGUplusClient('https://test.example.com', mockLogger(), mockRetryManager())
+  })
+
+  it('100개 파일(페이지당 20개) 조회 시 page 2~5를 병렬로 가져온다', async () => {
+    const fetchedPages: number[] = []
+
+    vi.spyOn(client, 'getFileList').mockImplementation(async (_folderId, options) => {
+      const page = options?.page ?? 1
+      fetchedPages.push(page)
+      await new Promise(r => setTimeout(r, 50))
+      return {
+        items: Array.from({ length: 20 }, (_, i) => ({
+          itemId: (page - 1) * 20 + i,
+          itemName: `file-${(page - 1) * 20 + i}.dxf`,
+          itemSize: 1024,
+          itemExtension: 'dxf',
+          parentFolderId: 1,
+          updatedAt: '2026-01-01',
+          isFolder: false,
+        })),
+        total: 100,
+      }
+    })
+
+    const start = Date.now()
+    const files = await client.getAllFiles(1)
+    const elapsed = Date.now() - start
+
+    expect(files).toHaveLength(100)
+    // 순차이면 ~250ms (5*50ms), 병렬이면 ~100ms (page1 + 나머지 batch)
+    expect(elapsed).toBeLessThan(200)
+  })
+
+  it('단일 페이지이면 추가 fetch 없음', async () => {
+    vi.spyOn(client, 'getFileList').mockResolvedValue({
+      items: [
+        { itemId: 1, itemName: 'only.dxf', itemSize: 100, itemExtension: 'dxf', parentFolderId: 1, updatedAt: '2026-01-01', isFolder: false },
+      ],
+      total: 1,
+    })
+
+    const files = await client.getAllFiles(1)
+
+    expect(files).toHaveLength(1)
+    expect(client.getFileList).toHaveBeenCalledTimes(1)
+  })
+})
