@@ -438,6 +438,101 @@ export class LGUplusClient implements ILGUplusClient {
     return allFiles
   }
 
+  async getAllFilesDeep(
+    folderId: number,
+    options?: { maxDepth?: number; concurrency?: number },
+  ): Promise<LGUplusFileItem[]> {
+    const maxDepth = options?.maxDepth ?? 10
+    const concurrency = options?.concurrency ?? 5
+    const allFiles: LGUplusFileItem[] = []
+    const visitedFolderIds = new Set<number>()
+
+    // Worker pool: 폴더가 발견되면 즉시 큐에 추가
+    const queue: Array<{ folderId: number; depth: number; relativePath: string }> = [
+      { folderId, depth: 0, relativePath: '' },
+    ]
+
+    let activeWorkers = 0
+    let resolveAll: (() => void) | undefined
+    const allDone = new Promise<void>((r) => {
+      resolveAll = r
+    })
+
+    const checkDone = (): void => {
+      if (queue.length === 0 && activeWorkers === 0) {
+        resolveAll?.()
+      }
+    }
+
+    const processNext = async (): Promise<void> => {
+      while (true) {
+        const entry = queue.shift()
+        if (!entry) {
+          // 큐가 비었지만 다른 워커가 아직 동작 중이면 잠시 대기
+          if (activeWorkers > 0) {
+            await new Promise((r) => setTimeout(r, 5))
+            continue
+          }
+          break
+        }
+
+        if (visitedFolderIds.has(entry.folderId)) {
+          checkDone()
+          continue
+        }
+        visitedFolderIds.add(entry.folderId)
+
+        activeWorkers++
+
+        // 파일 목록 + 서브폴더를 동시에 가져옴
+        const [files, subFolders] = await Promise.all([
+          this.getAllFiles(entry.folderId),
+          entry.depth < maxDepth
+            ? this.getSubFolders(entry.folderId)
+            : Promise.resolve([]),
+        ])
+
+        // 파일 수집
+        for (const file of files) {
+          if (!file.isFolder) {
+            allFiles.push({
+              ...file,
+              relativePath: entry.relativePath || undefined,
+            })
+          }
+        }
+
+        // 서브폴더를 즉시 큐에 추가
+        for (const sub of subFolders) {
+          if (!visitedFolderIds.has(sub.folderId)) {
+            const subPath = entry.relativePath
+              ? `${entry.relativePath}/${sub.folderName}`
+              : sub.folderName
+            queue.push({
+              folderId: sub.folderId,
+              depth: entry.depth + 1,
+              relativePath: subPath,
+            })
+          }
+        }
+
+        activeWorkers--
+        checkDone()
+      }
+    }
+
+    // concurrency 개수만큼 워커 시작
+    const workers = Array.from({ length: concurrency }, () => processNext())
+    await allDone
+
+    this.logger.info(`Deep scan complete: ${allFiles.length} files found`, {
+      folderId,
+      visitedFolders: visitedFolderIds.size,
+    })
+
+    return allFiles
+  }
+
   // ══════════════════════════════════════════════════
   // Download
   // ══════════════════════════════════════════════════
