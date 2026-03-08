@@ -19,6 +19,7 @@ import {
 } from './errors'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import type { FolderTreeCache } from './folder-tree-cache'
 
 type SessionEventHandler = (...args: unknown[]) => void
 
@@ -36,16 +37,18 @@ export class LGUplusClient implements ILGUplusClient {
   private baseUrl: string
   private logger: ILogger
   private retry: IRetryManager
+  private folderCache?: FolderTreeCache
   private authenticated = false
   private cookies = ''
   private storedUserId = ''
   private storedPassword = ''
   private eventHandlers = new Map<string, SessionEventHandler[]>()
 
-  constructor(baseUrl: string, logger: ILogger, retry: IRetryManager) {
+  constructor(baseUrl: string, logger: ILogger, retry: IRetryManager, folderCache?: FolderTreeCache) {
     this.baseUrl = baseUrl
     this.logger = logger.child({ module: 'lguplus-client' })
     this.retry = retry
+    this.folderCache = folderCache
   }
 
   // ══════════════════════════════════════════════════
@@ -335,6 +338,12 @@ export class LGUplusClient implements ILGUplusClient {
   }
 
   async getSubFolders(folderId: number): Promise<LGUplusFolderItem[]> {
+    // 캐시 히트 확인
+    if (this.folderCache) {
+      const cached = this.folderCache.getSubFolders(folderId)
+      if (cached) return cached
+    }
+
     const data = await this.callWhApi({
       MESSAGE_TYPE: 'FOLDER',
       PROCESS_TYPE: 'TREE',
@@ -350,12 +359,19 @@ export class LGUplusClient implements ILGUplusClient {
       SUB_CNT?: number
     }>
 
-    return raw.map((f) => ({
+    const folders = raw.map((f) => ({
       folderId: f.FOLDER_ID,
       folderName: f.FOLDER_NAME,
       parentFolderId: f.UPPER_FOLDER_ID ?? f.UPPER_ID ?? 0,
       subFolderCount: f.SUB_CNT,
     }))
+
+    // 캐시 저장
+    if (this.folderCache) {
+      this.folderCache.setSubFolders(folderId, folders)
+    }
+
+    return folders
   }
 
   async findFolderByName(parentId: number, name: string): Promise<number | null> {

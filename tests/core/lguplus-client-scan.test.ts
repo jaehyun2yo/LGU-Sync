@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { LGUplusClient } from '../../src/core/lguplus-client'
+import { FolderTreeCache } from '../../src/core/folder-tree-cache'
 import type { ILogger } from '../../src/core/types/logger.types'
 import type { IRetryManager } from '../../src/core/types/retry-manager.types'
 
@@ -114,6 +115,49 @@ describe('getAllFilesDeep - worker pool BFS', () => {
     const filesStart = timestamps['files:1']?.[0] ?? 0
     const subStart = timestamps['sub:1']?.[0] ?? 0
     expect(Math.abs(filesStart - subStart)).toBeLessThan(10)
+  })
+})
+
+describe('getSubFolders with cache', () => {
+  let client: LGUplusClient
+  let cache: FolderTreeCache
+
+  beforeEach(() => {
+    cache = new FolderTreeCache({ ttlMs: 5000 })
+    client = new LGUplusClient('https://test.example.com', mockLogger(), mockRetryManager(), cache)
+  })
+
+  it('두 번째 호출 시 API를 호출하지 않고 캐시에서 반환한다', async () => {
+    // callWhApi를 spy하여 API 호출 횟수 추적
+    const callWhApiSpy = vi.spyOn(client as any, 'callWhApi').mockResolvedValue({
+      RESULT_CODE: '0000',
+      ITEM_FOLDER: [
+        { FOLDER_ID: 10, FOLDER_NAME: 'A', UPPER_FOLDER_ID: 1 },
+        { FOLDER_ID: 20, FOLDER_NAME: 'B', UPPER_FOLDER_ID: 1 },
+      ],
+    })
+
+    // 첫 호출: API 호출 → 캐시 저장
+    const first = await client.getSubFolders(1)
+    expect(first).toHaveLength(2)
+    expect(callWhApiSpy).toHaveBeenCalledTimes(1)
+
+    // 두 번째 호출: 캐시 히트 → API 미호출
+    const second = await client.getSubFolders(1)
+    expect(second).toHaveLength(2)
+    expect(callWhApiSpy).toHaveBeenCalledTimes(1) // 여전히 1번만 호출
+  })
+
+  it('캐시 없이 생성된 클라이언트는 매번 API를 호출한다', async () => {
+    const clientNoCache = new LGUplusClient('https://test.example.com', mockLogger(), mockRetryManager())
+    const callWhApiSpy = vi.spyOn(clientNoCache as any, 'callWhApi').mockResolvedValue({
+      RESULT_CODE: '0000',
+      ITEM_FOLDER: [{ FOLDER_ID: 10, FOLDER_NAME: 'A', UPPER_FOLDER_ID: 1 }],
+    })
+
+    await clientNoCache.getSubFolders(1)
+    await clientNoCache.getSubFolders(1)
+    expect(callWhApiSpy).toHaveBeenCalledTimes(2)
   })
 })
 

@@ -21,6 +21,7 @@ import { FileDetector } from './file-detector'
 import { NotificationService } from './notification-service'
 import { SyncEngine } from './sync-engine'
 import { FolderDiscovery } from './folder-discovery'
+import { FolderTreeCache } from './folder-tree-cache'
 
 export interface CoreOptions {
   dbPath: string
@@ -67,10 +68,12 @@ export function createCoreServices(options: CoreOptions): CoreServices {
   const lguplusConfig = config.get('lguplus')
   const webhardConfig = config.get('webhard')
 
+  const folderCache = new FolderTreeCache()
   const lguplus = new LGUplusClient(
     'https://only.webhard.co.kr',
     logger,
     retry,
+    folderCache,
   )
 
   const uploader: IWebhardUploader = options.useMockUploader
