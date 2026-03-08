@@ -19,7 +19,7 @@ import type {
   LogQuery,
   QueryOptions,
 } from './db/types'
-import { PRAGMA_INIT, ALL_CREATE_STATEMENTS } from './db/schema'
+import { PRAGMA_INIT, ALL_CREATE_STATEMENTS, MIGRATIONS } from './db/schema'
 
 export class StateManager implements IStateManager {
   private db!: Database.Database
@@ -45,6 +45,15 @@ export class StateManager implements IStateManager {
     // Create tables
     for (const sql of ALL_CREATE_STATEMENTS) {
       this.db.exec(sql)
+    }
+
+    // Run migrations (idempotent — ignore already-applied)
+    for (const migration of MIGRATIONS) {
+      try {
+        this.db.exec(migration)
+      } catch {
+        // Already applied (e.g. duplicate column)
+      }
     }
 
     this.logger.info('Database initialized', { path: this.dbPath })
@@ -82,8 +91,8 @@ export class StateManager implements IStateManager {
     const id = uuid()
     this.db
       .prepare(
-        `INSERT INTO sync_files (id, folder_id, history_no, file_name, file_path, file_size, file_extension, lguplus_file_id, detected_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sync_files (id, folder_id, history_no, file_name, file_path, file_size, file_extension, lguplus_file_id, lguplus_updated_at, detected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -94,6 +103,7 @@ export class StateManager implements IStateManager {
         file.file_size,
         file.file_extension ?? null,
         file.lguplus_file_id ?? null,
+        file.lguplus_updated_at ?? null,
         file.detected_at,
       )
     return id
@@ -114,6 +124,7 @@ export class StateManager implements IStateManager {
         'download_completed_at',
         'upload_started_at',
         'upload_completed_at',
+        'lguplus_updated_at',
       ]
       for (const [key, val] of Object.entries(extra)) {
         if (allowedFields.includes(key)) {

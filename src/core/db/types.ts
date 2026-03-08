@@ -71,6 +71,7 @@ export interface SyncFileRow {
   file_size: number
   file_extension: string | null
   lguplus_file_id: string | null
+  lguplus_updated_at: string | null
   status: SyncFileStatus
   download_path: string | null
   self_webhard_file_id: string | null
@@ -94,6 +95,7 @@ export interface SyncFileInsert {
   file_size: number
   file_extension?: string | null
   lguplus_file_id?: string | null
+  lguplus_updated_at?: string | null
   detected_at: string
 }
 
@@ -105,6 +107,7 @@ export const SyncFileInsertSchema = z.object({
   file_size: z.number().int().nonnegative(),
   file_extension: z.string().nullable().optional(),
   lguplus_file_id: z.string().nullable().optional(),
+  lguplus_updated_at: z.string().nullable().optional(),
   detected_at: z.string(),
 })
 

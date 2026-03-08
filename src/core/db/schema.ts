@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS sync_files (
     file_size             INTEGER NOT NULL DEFAULT 0,
     file_extension        TEXT,
     lguplus_file_id       TEXT,
+    lguplus_updated_at    TEXT,
     status                TEXT NOT NULL DEFAULT 'detected',
     download_path         TEXT,
     self_webhard_file_id  TEXT,
@@ -207,6 +208,10 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `
+
+export const MIGRATIONS = [
+  `ALTER TABLE sync_files ADD COLUMN lguplus_updated_at TEXT;`,
+]
 
 /** All table creation statements in dependency order */
 export const ALL_CREATE_STATEMENTS = [
