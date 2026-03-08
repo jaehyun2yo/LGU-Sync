@@ -13,6 +13,7 @@ import type { IConfigManager } from './types/config.types'
 import type { INotificationService } from './types/notification.types'
 import type { IEventBus, EngineStatus, DetectedFile, DetectionStrategy } from './types/events.types'
 import type { ILogger } from './types/logger.types'
+import { stat } from 'node:fs/promises'
 import { v4 as uuid } from 'uuid'
 
 export interface SyncEngineDeps {
@@ -116,8 +117,8 @@ export class SyncEngine implements ISyncEngine {
 
       for (const folder of targetFolders) {
         try {
-          // Get all files from LGU+ folder
-          const files = await this.deps.lguplus.getAllFiles(
+          // Get all files from LGU+ folder (deep scan)
+          const files = await this.deps.lguplus.getAllFilesDeep(
             Number(folder.lguplus_folder_id),
           )
           scannedFiles += files.length
@@ -131,11 +132,12 @@ export class SyncEngine implements ISyncEngine {
 
             newFiles++
 
-            // Save file record
+            // Save file record (preserve relativePath in file_path)
+            const subPath = file.relativePath ? `${file.relativePath}/` : ''
             const fileId = this.deps.state.saveFile({
               folder_id: folder.id,
               file_name: file.itemName,
-              file_path: `/${folder.lguplus_folder_name}/${file.itemName}`,
+              file_path: `/${folder.lguplus_folder_name}/${subPath}${file.itemName}`,
               file_size: file.itemSize,
               file_extension: file.itemExtension,
               lguplus_file_id: String(file.itemId),
@@ -168,16 +170,37 @@ export class SyncEngine implements ISyncEngine {
     }
   }
 
-  async syncFile(fileId: string): Promise<SyncResult> {
+  async downloadOnly(fileId: string): Promise<SyncResult> {
     const file = this.deps.state.getFile(fileId)
     if (!file) {
       return { success: false, fileId, error: 'File not found' }
     }
 
     try {
-      // Step 1: Download from LGU+
+      // Check if file already exists locally
+      const destPath = `${this.getTempPath()}/${file.file_name}`
+      const checkPath = file.download_path ?? destPath
+
+      if (await this.isLocalFileValid(checkPath, file.file_size)) {
+        this.logger.info(`Download skipped (file exists): ${file.file_name}`, { fileId, path: checkPath })
+        this.deps.state.updateFileStatus(fileId, 'downloaded', {
+          download_completed_at: new Date().toISOString(),
+          download_path: checkPath,
+        })
+        return { success: true, fileId, skipped: true }
+      }
+
       this.deps.state.updateFileStatus(fileId, 'downloading', {
         download_started_at: new Date().toISOString(),
+      })
+
+      this.deps.eventBus.emit('sync:progress', {
+        fileId,
+        fileName: file.file_name,
+        progress: 0,
+        speedBps: 0,
+        phase: 'downloading',
+        fileSize: file.file_size,
       })
 
       const lguplusFileId = file.lguplus_file_id
@@ -197,23 +220,59 @@ export class SyncEngine implements ISyncEngine {
         this.deps.state.updateFileStatus(fileId, 'dl_failed', {
           last_error: 'Download failed',
         })
+        this.deps.eventBus.emit('sync:failed', { error: { message: 'Download failed' } as any, fileId })
         return { success: false, fileId, error: 'Download failed' }
       }
 
-      this.deps.state.updateFileStatus(fileId, 'uploading', {
+      this.deps.state.updateFileStatus(fileId, 'downloaded', {
         download_completed_at: new Date().toISOString(),
         download_path: `${this.getTempPath()}/${file.file_name}`,
+      })
+
+      this.logger.info(`File downloaded: ${file.file_name}`, { fileId })
+      return { success: true, fileId }
+    } catch (error) {
+      const errMsg = (error as Error).message
+      this.deps.state.updateFileStatus(fileId, 'dl_failed', {
+        last_error: errMsg,
+        retry_count: (file.retry_count ?? 0) + 1,
+      })
+      this.deps.eventBus.emit('sync:failed', { error: error as any, fileId })
+      this.logger.error(`Download failed for file ${fileId}`, error as Error)
+      return { success: false, fileId, error: errMsg }
+    }
+  }
+
+  async uploadOnly(fileId: string): Promise<SyncResult> {
+    const file = this.deps.state.getFile(fileId)
+    if (!file) {
+      return { success: false, fileId, error: 'File not found' }
+    }
+
+    const downloadPath = file.download_path
+    if (!downloadPath) {
+      return { success: false, fileId, error: 'File not downloaded yet (no download_path)' }
+    }
+
+    try {
+      this.deps.state.updateFileStatus(fileId, 'uploading', {
         upload_started_at: new Date().toISOString(),
       })
 
-      // Step 2: Upload to self-webhard (use self_webhard_path, not internal UUID)
+      this.deps.eventBus.emit('sync:progress', {
+        fileId,
+        fileName: file.file_name,
+        progress: 50,
+        speedBps: 0,
+        phase: 'uploading',
+        fileSize: file.file_size,
+      })
+
       let uploadFolderId = this.deps.state.getFolder(file.folder_id)?.self_webhard_path
       if (!uploadFolderId) {
-        // Try to create the folder path on self-webhard
         const folder = this.deps.state.getFolder(file.folder_id)
         if (folder) {
           const ensureResult = await this.deps.uploader.ensureFolderPath([
-            '올리기전용',
             folder.lguplus_folder_name,
           ])
           if (ensureResult.success && ensureResult.data) {
@@ -234,7 +293,7 @@ export class SyncEngine implements ISyncEngine {
         () =>
           this.deps.uploader.uploadFile({
             folderId: uploadFolderId!,
-            filePath: `${this.getTempPath()}/${file.file_name}`,
+            filePath: downloadPath,
             originalName: file.file_name,
           }),
         { maxRetries: 3, baseDelayMs: 1000, circuitName: 'webhard-upload' },
@@ -244,31 +303,60 @@ export class SyncEngine implements ISyncEngine {
         this.deps.state.updateFileStatus(fileId, 'ul_failed', {
           last_error: uploadResult.error ?? 'Upload failed',
         })
+        this.deps.eventBus.emit('sync:failed', { error: { message: uploadResult.error ?? 'Upload failed' } as any, fileId })
         return { success: false, fileId, error: 'Upload failed' }
       }
 
-      // Step 3: Mark as completed
       this.deps.state.updateFileStatus(fileId, 'completed', {
         self_webhard_file_id: uploadResult.data?.id,
         upload_completed_at: new Date().toISOString(),
       })
 
-      // Update daily stats
       const today = new Date().toISOString().slice(0, 10)
       this.deps.state.incrementDailyStats(today, 1, 0, file.file_size)
 
-      this.logger.info(`File synced: ${file.file_name}`, { fileId })
+      this.logger.info(`File uploaded: ${file.file_name}`, { fileId })
       return { success: true, fileId }
     } catch (error) {
       const errMsg = (error as Error).message
-      this.deps.state.updateFileStatus(fileId, 'dl_failed', {
+      this.deps.state.updateFileStatus(fileId, 'ul_failed', {
         last_error: errMsg,
         retry_count: (file.retry_count ?? 0) + 1,
       })
-
-      this.logger.error(`Sync failed for file ${fileId}`, error as Error)
+      this.deps.eventBus.emit('sync:failed', { error: error as any, fileId })
+      this.logger.error(`Upload failed for file ${fileId}`, error as Error)
       return { success: false, fileId, error: errMsg }
     }
+  }
+
+  async syncFile(fileId: string): Promise<SyncResult> {
+    const syncStartTime = Date.now()
+
+    // Step 1: Download
+    const dlResult = await this.downloadOnly(fileId)
+    if (!dlResult.success) {
+      return dlResult
+    }
+
+    // Step 2: Upload
+    const ulResult = await this.uploadOnly(fileId)
+    if (!ulResult.success) {
+      return ulResult
+    }
+
+    // Step 3: Emit completion event
+    const file = this.deps.state.getFile(fileId)
+    if (file) {
+      this.deps.eventBus.emit('file:completed', {
+        fileId,
+        fileName: file.file_name,
+        fileSize: file.file_size,
+        folderPath: file.file_path,
+        durationMs: Date.now() - syncStartTime,
+      })
+    }
+
+    return { success: true, fileId }
   }
 
   private handleDetectedFiles(files: DetectedFile[], strategy: DetectionStrategy): void {
@@ -300,6 +388,17 @@ export class SyncEngine implements ISyncEngine {
       this.syncFile(fileId).catch((error) => {
         this.logger.error(`Failed to sync detected file ${fileId}`, error as Error)
       })
+    }
+  }
+
+  private async isLocalFileValid(filePath: string, expectedSize: number): Promise<boolean> {
+    try {
+      const st = await stat(filePath)
+      if (!st.isFile()) return false
+      if (expectedSize > 0 && st.size !== expectedSize) return false
+      return true
+    } catch {
+      return false
     }
   }
 

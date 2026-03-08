@@ -20,6 +20,7 @@ export interface SyncResult {
   success: boolean
   fileId: string
   error?: string
+  skipped?: boolean
 }
 
 export interface ISyncEngine {
@@ -30,4 +31,6 @@ export interface ISyncEngine {
   resume(): Promise<void>
   fullSync(options?: FullSyncOptions): Promise<FullSyncResult>
   syncFile(fileId: string): Promise<SyncResult>
+  downloadOnly(fileId: string): Promise<SyncResult>
+  uploadOnly(fileId: string): Promise<SyncResult>
 }
