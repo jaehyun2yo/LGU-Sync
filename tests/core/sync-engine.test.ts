@@ -386,6 +386,37 @@ describe('SyncEngine', () => {
     })
   })
 
+  describe('downloadOnly() - structured path', () => {
+    it('다운로드 경로에 file_path의 폴더 구조가 반영된다', async () => {
+      const fileWithSubPath = {
+        id: 'structured-path-file',
+        folder_id: 'f1',
+        file_name: 'deep.dxf',
+        file_path: '/테스트업체/2026년/Q1/deep.dxf',
+        file_size: 1024,
+        status: 'detected',
+        lguplus_file_id: '5001',
+        download_path: undefined as string | undefined,
+      }
+
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileWithSubPath }))
+      ;(config.get as ReturnType<typeof vi.fn>).mockImplementation((section: string) => {
+        if (section === 'system') return { tempDownloadPath: './downloads' }
+        return {}
+      })
+
+      mockStat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+
+      await engine.downloadOnly('structured-path-file')
+
+      // downloadFile이 폴더 구조를 포함한 경로로 호출되어야 함
+      expect(lguplus.downloadFile).toHaveBeenCalledWith(
+        5001,
+        './downloads/테스트업체/2026년/Q1/deep.dxf',
+      )
+    })
+  })
+
   describe('fullSync()', () => {
     it('전체 동기화 결과를 반환한다', async () => {
       ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([

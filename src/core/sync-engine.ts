@@ -177,8 +177,8 @@ export class SyncEngine implements ISyncEngine {
     }
 
     try {
-      // Check if file already exists locally
-      const destPath = `${this.getTempPath()}/${file.file_name}`
+      // Check if file already exists locally (preserve folder structure from file_path)
+      const destPath = `${this.getTempPath()}${file.file_path}`
       const checkPath = file.download_path ?? destPath
 
       if (await this.isLocalFileValid(checkPath, file.file_size)) {
@@ -209,10 +209,7 @@ export class SyncEngine implements ISyncEngine {
 
       const downloadResult = await this.deps.retry.execute(
         () =>
-          this.deps.lguplus.downloadFile(
-            lguplusFileId,
-            `${this.getTempPath()}/${file.file_name}`,
-          ),
+          this.deps.lguplus.downloadFile(lguplusFileId, destPath),
         { maxRetries: 3, baseDelayMs: 1000, circuitName: 'lguplus-download' },
       )
 
@@ -226,7 +223,7 @@ export class SyncEngine implements ISyncEngine {
 
       this.deps.state.updateFileStatus(fileId, 'downloaded', {
         download_completed_at: new Date().toISOString(),
-        download_path: `${this.getTempPath()}/${file.file_name}`,
+        download_path: destPath,
       })
 
       this.logger.info(`File downloaded: ${file.file_name}`, { fileId })
