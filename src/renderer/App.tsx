@@ -18,26 +18,35 @@ import { TestPage } from './pages/TestPage'
 function PageRouter() {
   const currentPage = useUiStore((s) => s.currentPage)
 
-  switch (currentPage) {
-    case 'dashboard':
-      return <DashboardPage />
-    case 'file-explorer':
-      return <FileExplorerPage />
-    case 'folder-settings':
-      return <FolderSettingsPage />
-    case 'sync-log':
-      return <LogViewerPage />
-    case 'statistics':
-      return <StatisticsPage />
-    case 'migration':
-      return <MigrationPage />
-    case 'test':
-      return <TestPage />
-    case 'settings':
-      return <SettingsPage />
-    default:
-      return <DashboardPage />
-  }
+  const activePage = (() => {
+    switch (currentPage) {
+      case 'dashboard':
+        return <DashboardPage />
+      case 'file-explorer':
+        return <FileExplorerPage />
+      case 'folder-settings':
+        return <FolderSettingsPage />
+      case 'sync-log':
+        return <LogViewerPage />
+      case 'statistics':
+        return <StatisticsPage />
+      case 'migration':
+        return <MigrationPage />
+      case 'settings':
+        return <SettingsPage />
+      default:
+        return <DashboardPage />
+    }
+  })()
+
+  return (
+    <>
+      {currentPage !== 'test' && activePage}
+      <div className={currentPage === 'test' ? 'flex flex-col h-full' : 'hidden'}>
+        <TestPage />
+      </div>
+    </>
+  )
 }
 
 function App() {

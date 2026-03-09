@@ -53,6 +53,14 @@ async function initialize(): Promise<void> {
   // Step 1: Initialize Core services
   const dbPath = path.join(app.getPath('userData'), 'sync.db')
   coreServices = createCoreServices({ dbPath })
+
+  // Resolve tempDownloadPath to absolute path under userData
+  const systemConfig = coreServices.config.get('system')
+  if (!path.isAbsolute(systemConfig.tempDownloadPath)) {
+    const resolvedPath = path.join(app.getPath('userData'), 'downloads')
+    coreServices.config.set('system', { tempDownloadPath: resolvedPath })
+  }
+
   coreServices.logger.info('App starting', { version: app.getVersion() })
 
   // Step 2: Register IPC handlers

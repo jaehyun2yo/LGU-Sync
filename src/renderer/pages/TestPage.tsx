@@ -15,6 +15,7 @@ import {
   RefreshCw,
   ChevronRight,
   ChevronDown,
+  FolderOpen,
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { useSort } from '../hooks/useSort'
@@ -41,6 +42,24 @@ interface FileResult {
   downloadSuccess?: boolean
   uploadSuccess?: boolean
 }
+
+interface TabState {
+  state: TestState
+  results: FileResult[]
+  summary: { success: number; failed: number; durationMs: number } | null
+  error: string | null
+  progress: TestProgressEvent | null
+}
+
+const INITIAL_TAB_STATE: TabState = {
+  state: 'idle',
+  results: [],
+  summary: null,
+  error: null,
+  progress: null,
+}
+
+const ALL_TABS: TestTab[] = ['download', 'upload', 'full-sync']
 
 type FolderSortField = 'folderName' | 'fileCount' | 'syncedCount' | 'remaining' | 'totalSize'
 
@@ -190,14 +209,20 @@ function FolderTreeRow({
 
 export function TestPage() {
   const [tab, setTab] = useState<TestTab>('download')
-  const [state, setState] = useState<TestState>('idle')
   const [folders, setFolders] = useState<MigrationFolderInfo[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [results, setResults] = useState<FileResult[]>([])
-  const [summary, setSummary] = useState<{ success: number; failed: number; durationMs: number } | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [progress, setProgress] = useState<TestProgressEvent | null>(null)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [tabStates, setTabStates] = useState<Record<TestTab, TabState>>(
+    () => Object.fromEntries(ALL_TABS.map((t) => [t, { ...INITIAL_TAB_STATE }])) as Record<TestTab, TabState>,
+  )
+
+  // Per-tab state accessors
+  const currentTabState = tabStates[tab]
+  const { state, results, summary, error, progress } = currentTabState
+
+  const updateTabState = useCallback((targetTab: TestTab, patch: Partial<TabState>) => {
+    setTabStates((prev) => ({ ...prev, [targetTab]: { ...prev[targetTab], ...patch } }))
+  }, [])
 
   const {
     sorted: sortedFolders,
@@ -213,26 +238,15 @@ export function TestPage() {
     handleSortChange: handleResultSortChange,
   } = useSort(results, 'fileName' as ResultSortField, 'asc', resultComparators)
 
-  // Listen for test progress events
+  // Listen for test progress events — route to the correct tab
   useIpcEvent('test:progress', useCallback((data: TestProgressEvent) => {
-    setProgress(data)
+    const targetTab = data.testType === 'full-sync' ? 'full-sync' : data.testType as TestTab
+    setTabStates((prev) => ({ ...prev, [targetTab]: { ...prev[targetTab], progress: data } }))
   }, []))
-
-  // Reset state when tab changes
-  useEffect(() => {
-    setState('idle')
-    setResults([])
-    setSummary(null)
-    setError(null)
-    setProgress(null)
-  }, [tab])
 
   // Scan folders
   const handleScan = useCallback(async () => {
-    setState('scanning')
-    setError(null)
-    setResults([])
-    setSummary(null)
+    updateTabState(tab, { state: 'scanning', error: null, results: [], summary: null })
     try {
       const res = await window.electronAPI.invoke('test:scan-folders')
       if (res.success && res.data) {
@@ -240,16 +254,14 @@ export function TestPage() {
         const allIds = collectAllIds(res.data)
         setSelectedIds(new Set(allIds))
         setExpandedIds(new Set())
-        setState('selecting')
+        updateTabState(tab, { state: 'selecting' })
       } else {
-        setError(res.error?.message ?? '스캔 실패')
-        setState('idle')
+        updateTabState(tab, { error: res.error?.message ?? '스캔 실패', state: 'idle' })
       }
     } catch {
-      setError('폴더 스캔 중 오류가 발생했습니다')
-      setState('idle')
+      updateTabState(tab, { error: '폴더 스캔 중 오류가 발생했습니다', state: 'idle' })
     }
-  }, [])
+  }, [tab, updateTabState])
 
   const toggleFolder = useCallback((id: string, descendantIds: string[]) => {
     setSelectedIds((prev) => {
@@ -277,81 +289,66 @@ export function TestPage() {
   // Run test
   const handleStart = useCallback(async () => {
     if (selectedIds.size === 0) return
-    setState('testing')
-    setError(null)
-    setResults([])
-    setSummary(null)
-    setProgress(null)
+    const runTab = tab
+    updateTabState(runTab, { state: 'testing', error: null, results: [], summary: null, progress: null })
 
     const folderIds = Array.from(selectedIds)
 
     try {
-      if (tab === 'download') {
+      if (runTab === 'download') {
         const res = await window.electronAPI.invoke('test:download-only', { folderIds })
         if (res.success && res.data) {
           const data = res.data as TestDownloadResult
-          setResults(data.results.map((r) => ({
-            fileId: r.fileId,
-            fileName: r.fileName,
-            success: r.success,
-            error: r.error,
-            downloadPath: r.downloadPath,
-            fileSize: r.fileSize,
-          })))
-          setSummary({ success: data.downloadedFiles, failed: data.failedFiles, durationMs: data.durationMs })
-          setState('complete')
+          updateTabState(runTab, {
+            results: data.results.map((r) => ({
+              fileId: r.fileId, fileName: r.fileName, success: r.success,
+              error: r.error, downloadPath: r.downloadPath, fileSize: r.fileSize,
+            })),
+            summary: { success: data.downloadedFiles, failed: data.failedFiles, durationMs: data.durationMs },
+            state: 'complete',
+          })
         } else {
-          setError(res.error?.message ?? '다운로드 테스트 실패')
-          setState('selecting')
+          updateTabState(runTab, { error: res.error?.message ?? '다운로드 테스트 실패', state: 'selecting' })
         }
-      } else if (tab === 'upload') {
+      } else if (runTab === 'upload') {
         const res = await window.electronAPI.invoke('test:upload-only', { folderIds })
         if (res.success && res.data) {
           const data = res.data as TestUploadResult
-          setResults(data.results.map((r) => ({
-            fileId: r.fileId,
-            fileName: r.fileName,
-            success: r.success,
-            error: r.error,
-          })))
-          setSummary({ success: data.uploadedFiles, failed: data.failedFiles, durationMs: data.durationMs })
-          setState('complete')
+          updateTabState(runTab, {
+            results: data.results.map((r) => ({
+              fileId: r.fileId, fileName: r.fileName, success: r.success, error: r.error,
+            })),
+            summary: { success: data.uploadedFiles, failed: data.failedFiles, durationMs: data.durationMs },
+            state: 'complete',
+          })
         } else {
-          setError(res.error?.message ?? '업로드 테스트 실패')
-          setState('selecting')
+          updateTabState(runTab, { error: res.error?.message ?? '업로드 테스트 실패', state: 'selecting' })
         }
       } else {
         const res = await window.electronAPI.invoke('test:full-sync', { folderIds })
         if (res.success && res.data) {
           const data = res.data as TestFullSyncResult
-          setResults(data.results.map((r) => ({
-            fileId: r.fileId,
-            fileName: r.fileName,
-            success: r.downloadSuccess && r.uploadSuccess,
-            downloadSuccess: r.downloadSuccess,
-            uploadSuccess: r.uploadSuccess,
-            error: r.error,
-          })))
-          setSummary({ success: data.syncedFiles, failed: data.failedFiles, durationMs: data.durationMs })
-          setState('complete')
+          updateTabState(runTab, {
+            results: data.results.map((r) => ({
+              fileId: r.fileId, fileName: r.fileName,
+              success: r.downloadSuccess && r.uploadSuccess,
+              downloadSuccess: r.downloadSuccess, uploadSuccess: r.uploadSuccess, error: r.error,
+            })),
+            summary: { success: data.syncedFiles, failed: data.failedFiles, durationMs: data.durationMs },
+            state: 'complete',
+          })
         } else {
-          setError(res.error?.message ?? '전체 동기화 테스트 실패')
-          setState('selecting')
+          updateTabState(runTab, { error: res.error?.message ?? '전체 동기화 테스트 실패', state: 'selecting' })
         }
       }
     } catch {
-      setError('테스트 실행 중 오류가 발생했습니다')
-      setState('selecting')
+      updateTabState(runTab, { error: '테스트 실행 중 오류가 발생했습니다', state: 'selecting' })
     }
-  }, [selectedIds, tab])
+  }, [selectedIds, tab, updateTabState])
 
   const handleReset = useCallback(() => {
-    setState('idle')
-    setResults([])
-    setSummary(null)
-    setError(null)
-    setProgress(null)
-  }, [])
+    updateTabState(tab, { ...INITIAL_TAB_STATE })
+  }, [tab, updateTabState])
 
   const toggleExpand = useCallback((id: string) => {
     setExpandedIds((prev) => {
@@ -362,16 +359,20 @@ export function TestPage() {
     })
   }, [])
 
-  const selectedFiles = useMemo(() => {
+  const { selectedFiles, selectedSize } = useMemo(() => {
     let count = 0
-    function countFiles(list: MigrationFolderInfo[]) {
+    let size = 0
+    function aggregate(list: MigrationFolderInfo[]) {
       for (const f of list) {
-        if (selectedIds.has(f.id)) count += f.fileCount
-        if (f.children) countFiles(f.children)
+        if (selectedIds.has(f.id)) {
+          count += f.fileCount
+          size += f.totalSize
+        }
+        if (f.children) aggregate(f.children)
       }
     }
-    countFiles(folders)
-    return count
+    aggregate(folders)
+    return { selectedFiles: count, selectedSize: size }
   }, [folders, selectedIds])
 
   return (
@@ -405,6 +406,11 @@ export function TestPage() {
             >
               <Icon className="h-3.5 w-3.5" />
               {conf.label}
+              {tabStates[key].state === 'scanning' || tabStates[key].state === 'testing' ? (
+                <Loader className="h-3 w-3 animate-spin text-info" />
+              ) : tabStates[key].state === 'complete' ? (
+                <CheckCircle2 className="h-3 w-3 text-success" />
+              ) : null}
             </button>
           )
         })}
@@ -460,7 +466,7 @@ export function TestPage() {
                 {selectedIds.size === allFolderIds.length ? '전체 해제' : '전체 선택'}
               </button>
               <span className="text-xs text-muted-foreground">
-                {selectedIds.size}개 폴더 선택됨 ({selectedFiles.toLocaleString('ko-KR')}개 파일)
+                {selectedIds.size}개 폴더 선택됨 ({selectedFiles.toLocaleString('ko-KR')}개 파일, {formatSize(selectedSize)})
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -666,17 +672,24 @@ export function TestPage() {
             >
               처음으로 돌아가기
             </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md border border-border hover:bg-accent transition-colors"
+              onClick={() => window.electronAPI.invoke('test:open-download-folder')}
+            >
+              <FolderOpen className="h-4 w-4" />
+              다운로드 폴더 열기
+            </button>
             {tab === 'download' && summary.success > 0 && (
               <button
                 type="button"
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                 onClick={() => {
+                  // If upload tab is idle, set it to selecting so folder list shows
+                  if (tabStates['upload'].state === 'idle') {
+                    updateTabState('upload', { state: 'selecting' })
+                  }
                   setTab('upload')
-                  // Keep folders loaded, go to selecting
-                  setState('selecting')
-                  setResults([])
-                  setSummary(null)
-                  setProgress(null)
                 }}
               >
                 <Upload className="h-4 w-4" />

@@ -435,6 +435,7 @@ export interface IpcChannelMap {
   'test:download-only': { request: TestDownloadRequest; response: ApiResponse<TestDownloadResult> }
   'test:upload-only': { request: TestUploadRequest; response: ApiResponse<TestUploadResult> }
   'test:full-sync': { request: FullSyncRequest; response: ApiResponse<TestFullSyncResult> }
+  'test:open-download-folder': { request: void; response: ApiResponse<void> }
 
   // Failed / DLQ
   'failed:list': { request: PaginationRequest; response: ApiResponse<Paginated<FailedEvent>> }
