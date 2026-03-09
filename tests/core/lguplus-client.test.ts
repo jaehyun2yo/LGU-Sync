@@ -8,6 +8,27 @@ import { lguplusHandlers, resetMockSession } from '../mocks/lguplus-handlers'
 
 vi.mock('node:fs/promises')
 
+// Mock node:fs for createWriteStream
+vi.mock('node:fs', () => {
+  const { PassThrough } = require('node:stream')
+  return {
+    createWriteStream: vi.fn(() => {
+      // Return a writable stream that emits 'finish' on end
+      const stream = new PassThrough()
+      // Track bytes written for size verification
+      let bytesWritten = 0
+      const originalWrite = stream.write.bind(stream)
+      stream.write = (chunk: Buffer, ...args: any[]) => {
+        bytesWritten += chunk.byteLength
+        return originalWrite(chunk, ...args)
+      }
+      // Emit 'finish' when ended
+      stream.on('end', () => stream.emit('finish'))
+      return stream
+    }),
+  }
+})
+
 const server = setupServer(...lguplusHandlers)
 
 describe('LGUplusClient', () => {
@@ -127,16 +148,16 @@ describe('LGUplusClient', () => {
   describe('Download', () => {
     beforeEach(async () => {
       await client.login('testuser', 'testpass')
-      const { mkdir, writeFile } = await import('node:fs/promises')
+      const { mkdir, unlink } = await import('node:fs/promises')
       vi.mocked(mkdir).mockResolvedValue(undefined)
-      vi.mocked(writeFile).mockResolvedValue(undefined)
+      vi.mocked(unlink).mockResolvedValue(undefined)
     })
 
     it('성공 시 파일을 다운로드하고 결과를 반환한다', async () => {
       const result = await client.downloadFile(5001, '/tmp/test.dxf')
       expect(result).toEqual({ success: true, size: 10240, filename: 'test.dxf' })
-      const { writeFile } = await import('node:fs/promises')
-      expect(writeFile).toHaveBeenCalled()
+      const { createWriteStream } = await import('node:fs')
+      expect(createWriteStream).toHaveBeenCalled()
     })
 
     it('파일 없음 (fileId=9999) → success: false', async () => {

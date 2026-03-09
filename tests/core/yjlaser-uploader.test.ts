@@ -12,14 +12,25 @@ import type { IRetryManager } from '../../src/core/types/retry-manager.types'
 
 // Mock node:fs/promises
 vi.mock('node:fs/promises', () => ({
-  readFile: vi.fn(),
   stat: vi.fn(),
 }))
 
-import { readFile, stat } from 'node:fs/promises'
+// Mock node:fs (createReadStream for streaming upload)
+vi.mock('node:fs', () => {
+  const { Readable } = require('node:stream')
+  return {
+    createReadStream: vi.fn(() => {
+      // Default: return a readable stream with mock data
+      return Readable.from(Buffer.from('mock-file-content'))
+    }),
+  }
+})
 
-const mockReadFile = vi.mocked(readFile)
+import { stat } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+
 const mockStat = vi.mocked(stat)
+const mockCreateReadStream = vi.mocked(createReadStream)
 
 const API_URL = 'https://test-api.yjlaser.com'
 const API_KEY = 'test-api-key-123'
@@ -236,7 +247,7 @@ describe('YjlaserUploader', () => {
       const folderId = folder.data!.id
 
       // Directly record a file via MSW state
-      mockReadFile.mockResolvedValue(Buffer.from('test-content'))
+      // createReadStream is already mocked with default data
       mockStat.mockResolvedValue({ size: 12 } as any)
 
       await uploader.uploadFile({
@@ -270,7 +281,7 @@ describe('YjlaserUploader', () => {
 
   describe('uploadFile()', () => {
     beforeEach(() => {
-      mockReadFile.mockResolvedValue(Buffer.from('dxf-file-content'))
+      // createReadStream mock is already set up globally
       mockStat.mockResolvedValue({ size: 16 } as any)
     })
 
@@ -435,8 +446,8 @@ describe('YjlaserUploader', () => {
         expect(result.success).toBe(false)
       })
 
-      it('fs.readFile 실패 → success: false', async () => {
-        mockReadFile.mockRejectedValue(new Error('ENOENT: no such file'))
+      it('fs.stat 실패 → success: false', async () => {
+        mockStat.mockRejectedValue(new Error('ENOENT: no such file'))
 
         const result = await uploader.uploadFile({
           folderId: 'folder-1',
@@ -453,7 +464,7 @@ describe('YjlaserUploader', () => {
 
   describe('uploadFileBatch()', () => {
     beforeEach(() => {
-      mockReadFile.mockResolvedValue(Buffer.from('file-data'))
+      // createReadStream mock is already set up globally
       mockStat.mockResolvedValue({ size: 9 } as any)
     })
 
@@ -477,14 +488,14 @@ describe('YjlaserUploader', () => {
       const folder = await uploader.createFolder({ name: 'batch', parentId: null })
       const folderId = folder.data!.id
 
-      // Second file will fail due to readFile error
+      // Second file will fail due to stat error
       let callCount = 0
-      mockReadFile.mockImplementation(async () => {
+      mockStat.mockImplementation(async () => {
         callCount++
         if (callCount === 2) {
-          throw new Error('Read error')
+          throw new Error('Stat error')
         }
-        return Buffer.from('file-data')
+        return { size: 9 } as any
       })
 
       const result = await uploader.uploadFileBatch([

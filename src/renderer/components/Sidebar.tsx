@@ -171,6 +171,7 @@ export function Sidebar() {
         <button
           onClick={toggleSidebar}
           className="ml-auto p-1 rounded hover:bg-accent text-muted-foreground"
+          aria-label={sidebarCollapsed ? '사이드바 펼치기' : '사이드바 접기'}
         >
           {sidebarCollapsed ? (
             <ChevronRight className="h-4 w-4" />

@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   XCircle,
 } from 'lucide-react'
-import { cn } from '../lib/utils'
+import { cn, formatElapsedTime } from '../lib/utils'
 import type { MigrationFolderInfo, MigrationResult } from '../../shared/ipc-types'
 
 type MigrationState = 'idle' | 'scanning' | 'selecting' | 'migrating' | 'complete'
@@ -326,7 +326,7 @@ export function MigrationPage() {
 
           <div className="text-xs text-muted-foreground">
             총 {result.scannedFiles.toLocaleString('ko-KR')}개 파일 스캔, 소요 시간:{' '}
-            {formatDuration(result.durationMs)}
+            {formatElapsedTime(result.durationMs)}
           </div>
 
           <button
@@ -368,16 +368,4 @@ export function MigrationPage() {
       )}
     </div>
   )
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  const sec = Math.floor(ms / 1000)
-  if (sec < 60) return `${sec}초`
-  const min = Math.floor(sec / 60)
-  const remainSec = sec % 60
-  if (min < 60) return `${min}분 ${remainSec}초`
-  const hr = Math.floor(min / 60)
-  const remainMin = min % 60
-  return `${hr}시간 ${remainMin}분`
 }

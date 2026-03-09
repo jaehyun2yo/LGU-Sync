@@ -36,7 +36,9 @@ export type UiStore = UiState & UiActions
 const getInitialTheme = (): 'dark' | 'light' => {
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('theme')
-    if (stored === 'dark' || stored === 'light') return stored
+    const theme = stored === 'dark' || stored === 'light' ? stored : 'dark'
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    return theme
   }
   return 'dark'
 }

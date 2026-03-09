@@ -20,7 +20,7 @@ import {
   StopCircle,
   Bell,
 } from 'lucide-react'
-import { cn } from '../lib/utils'
+import { cn, formatBytes, formatElapsedTime } from '../lib/utils'
 import { useSort } from '../hooks/useSort'
 import { SortableHeader } from '../components/SortableHeader'
 import { useIpcEvent } from '../hooks/useIpcEvent'
@@ -73,14 +73,6 @@ const folderComparators: Record<FolderSortField, (a: MigrationFolderInfo, b: Mig
   syncedCount: (a, b) => a.syncedCount - b.syncedCount,
   remaining: (a, b) => (a.fileCount - a.syncedCount) - (b.fileCount - b.syncedCount),
   totalSize: (a, b) => a.totalSize - b.totalSize,
-}
-
-function formatSize(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const value = bytes / Math.pow(1024, i)
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
 }
 
 function formatTimeAgo(timestamp: number): string {
@@ -197,7 +189,7 @@ function FolderTreeRow({
           {folder.fileCount.toLocaleString('ko-KR')}
         </span>
         <span className="shrink-0 w-20 text-xs text-muted-foreground text-right tabular-nums">
-          {formatSize(folder.totalSize)}
+          {formatBytes(folder.totalSize)}
         </span>
         <span className="shrink-0 w-20 text-xs text-success text-right tabular-nums">
           {folder.syncedCount.toLocaleString('ko-KR')}
@@ -521,7 +513,7 @@ export function TestPage() {
                 {selectedIds.size === allFolderIds.length ? '전체 해제' : '전체 선택'}
               </button>
               <span className="text-xs text-muted-foreground">
-                {selectedIds.size}개 폴더 선택됨 ({selectedFiles.toLocaleString('ko-KR')}개 파일, {formatSize(selectedSize)})
+                {selectedIds.size}개 폴더 선택됨 ({selectedFiles.toLocaleString('ko-KR')}개 파일, {formatBytes(selectedSize)})
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -639,7 +631,7 @@ export function TestPage() {
                 <p className="text-xs text-muted-foreground">실패</p>
               </div>
               <div className="rounded-lg border border-border bg-card px-4 py-2 text-center">
-                <p className="text-xl font-bold tabular-nums text-muted-foreground">{formatDuration(summary.durationMs)}</p>
+                <p className="text-xl font-bold tabular-nums text-muted-foreground">{formatElapsedTime(summary.durationMs)}</p>
                 <p className="text-xs text-muted-foreground">소요시간</p>
               </div>
             </div>
@@ -927,26 +919,6 @@ function getEventLabel(type: RealtimeTestEvent['type']): string {
     case 'stopped': return '중지'
     default: return type
   }
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  const sec = Math.floor(ms / 1000)
-  if (sec < 60) return `${sec}초`
-  const min = Math.floor(sec / 60)
-  const remainSec = sec % 60
-  if (min < 60) return `${min}분 ${remainSec}초`
-  const hr = Math.floor(min / 60)
-  const remainMin = min % 60
-  return `${hr}시간 ${remainMin}분`
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
 function getOperCodeColor(code: string): string {

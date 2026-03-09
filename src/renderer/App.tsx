@@ -50,15 +50,10 @@ function PageRouter() {
 }
 
 function App() {
-  const { theme, setPage } = useUiStore()
+  const { setPage } = useUiStore()
   const { fetchStatus, handleProgress, handleFileCompleted, handleFileFailed, handleStatusChanged } =
     useSyncStore()
   const { fetchNotifications } = useNotificationStore()
-
-  // Initialize theme
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-  }, [theme])
 
   // Fetch initial data
   useEffect(() => {

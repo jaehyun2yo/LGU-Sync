@@ -1,4 +1,5 @@
-import { readFile, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import type {
   IWebhardUploader,
   ConnectionTestResult,
@@ -198,8 +199,7 @@ export class YjlaserUploader implements IWebhardUploader {
 
   async uploadFile(params: UploadFileParams): Promise<WResult<UploadedFileInfo>> {
     try {
-      // 1. Read file
-      const buffer = await readFile(params.filePath)
+      // 1. Get file size (without reading entire file into memory)
       const fileStat = await stat(params.filePath)
       const size = fileStat.size
 
@@ -226,11 +226,16 @@ export class YjlaserUploader implements IWebhardUploader {
         return { success: true, data: skippedFile }
       }
 
-      // 3. PUT to R2
+      // 3. PUT to R2 — 스트리밍으로 메모리 사용 최소화
       const putRes = await fetch(presignRes.data.presignedUrl, {
         method: 'PUT',
-        body: buffer,
-        headers: { 'Content-Type': 'application/octet-stream' },
+        body: createReadStream(params.filePath) as unknown as BodyInit,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(size),
+        },
+        // @ts-expect-error Node.js fetch duplex option for streaming body
+        duplex: 'half',
       })
 
       if (!putRes.ok) {
@@ -288,21 +293,36 @@ export class YjlaserUploader implements IWebhardUploader {
   async uploadFileBatch(
     files: UploadFileParams[],
     onProgress?: (done: number, total: number) => void,
+    concurrency = 3,
   ): Promise<BatchUploadResult> {
     const start = Date.now()
     let success = 0
     let failed = 0
     const skipped = 0
+    let done = 0
 
-    for (let i = 0; i < files.length; i++) {
-      const result = await this.uploadFile(files[i])
-      if (result.success) {
-        success++
-      } else {
-        failed++
+    // Worker pool: 공유 인덱스에서 다음 파일을 꺼내 처리
+    let nextIndex = 0
+    const processWorker = async (): Promise<void> => {
+      while (true) {
+        const idx = nextIndex++
+        if (idx >= files.length) break
+        const result = await this.uploadFile(files[idx])
+        if (result.success) {
+          success++
+        } else {
+          failed++
+        }
+        done++
+        onProgress?.(done, files.length)
       }
-      onProgress?.(i + 1, files.length)
     }
+
+    const workers = Array.from(
+      { length: Math.min(concurrency, files.length) },
+      () => processWorker(),
+    )
+    await Promise.all(workers)
 
     return {
       total: files.length,

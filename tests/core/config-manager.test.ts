@@ -34,7 +34,7 @@ describe('ConfigManager', () => {
     config.set('lguplus', { username: 'testuser' })
     const lguplus = config.get('lguplus')
     expect(lguplus.username).toBe('testuser')
-    expect(lguplus.password).toBe('') // default unchanged
+    expect(lguplus.password).toBe(DEFAULT_CONFIG.lguplus.password) // default unchanged
   })
 
   it('validate()는 유효한 설정에 대해 true를 반환한다', () => {

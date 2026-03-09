@@ -5,13 +5,19 @@ import type { IRetryManager } from '../../src/core/types/retry-manager.types'
 
 // Mock node:fs/promises
 vi.mock('node:fs/promises', () => ({
-  readFile: vi.fn(),
   stat: vi.fn(),
 }))
 
-import { readFile, stat } from 'node:fs/promises'
+// Mock node:fs (createReadStream for streaming upload)
+vi.mock('node:fs', () => {
+  const { Readable } = require('node:stream')
+  return {
+    createReadStream: vi.fn(() => Readable.from(Buffer.from('mock-file-content'))),
+  }
+})
 
-const mockReadFile = vi.mocked(readFile)
+import { stat } from 'node:fs/promises'
+
 const mockStat = vi.mocked(stat)
 
 const mockLogger: ILogger = {
@@ -41,7 +47,7 @@ describe('YjlaserUploader.uploadFile batch-record response', () => {
     vi.restoreAllMocks()
     // Re-apply mocks after restoreAllMocks
     vi.mocked(mockLogger.child).mockReturnThis()
-    mockReadFile.mockResolvedValue(Buffer.from('test-content'))
+    // createReadStream mock is already set up globally
     mockStat.mockResolvedValue({ size: 12 } as any)
   })
 

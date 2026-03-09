@@ -1,6 +1,6 @@
+import { useEffect } from 'react'
 import { X, CheckCheck, Bell, AlertCircle, CheckCircle, AlertTriangle, Info } from 'lucide-react'
-import { cn } from '../lib/utils'
-import { formatRelativeTime } from '../lib/utils'
+import { cn, formatRelativeTime } from '../lib/utils'
 import { useNotificationStore } from '../stores/notification-store'
 import type { NotificationType } from '../../shared/ipc-types'
 
@@ -21,6 +21,16 @@ const typeColors: Record<NotificationType, string> = {
 export function NotificationCenter() {
   const { notifications, isOpen, close, markRead, markAllRead } = useNotificationStore()
 
+  // Escape key to close
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, close])
+
   if (!isOpen) return null
 
   return (
@@ -29,7 +39,7 @@ export function NotificationCenter() {
       <div className="fixed inset-0 z-40" onClick={close} />
 
       {/* Panel */}
-      <div className="fixed top-14 right-4 z-50 w-[380px] max-h-[500px] bg-popover border border-border rounded-lg shadow-lg flex flex-col">
+      <div role="dialog" aria-label="알림 센터" className="fixed top-14 right-4 z-50 w-[380px] max-h-[500px] bg-popover border border-border rounded-lg shadow-lg flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2">

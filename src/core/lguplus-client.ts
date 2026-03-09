@@ -20,7 +20,8 @@ import {
   FileDownloadTransferError,
   FileDownloadSizeMismatchError,
 } from './errors'
-import { writeFile, mkdir } from 'node:fs/promises'
+import { mkdir, unlink } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
 import { dirname } from 'node:path'
 import type { FolderTreeCache } from './folder-tree-cache'
 
@@ -557,8 +558,27 @@ export class LGUplusClient implements ILGUplusClient {
       resolveAll = r
     })
 
+    // 이벤트 기반 큐 알림: busy-wait 대신 대기 워커를 깨움
+    const waiters: (() => void)[] = []
+    const notifyWaiters = (): void => {
+      while (waiters.length > 0 && queue.length > 0) {
+        waiters.shift()?.()
+      }
+    }
+    const wakeAllWaiters = (): void => {
+      for (const wake of waiters.splice(0)) {
+        wake()
+      }
+    }
+
+    const enqueue = (entry: { folderId: number; depth: number; relativePath: string }): void => {
+      queue.push(entry)
+      notifyWaiters()
+    }
+
     const checkDone = (): void => {
       if (queue.length === 0 && activeWorkers === 0) {
+        wakeAllWaiters()
         resolveAll?.()
       }
     }
@@ -567,9 +587,11 @@ export class LGUplusClient implements ILGUplusClient {
       while (true) {
         const entry = queue.shift()
         if (!entry) {
-          // 큐가 비었지만 다른 워커가 아직 동작 중이면 잠시 대기
+          // 큐가 비었지만 다른 워커가 아직 동작 중이면 이벤트 대기
           if (activeWorkers > 0) {
-            await new Promise((r) => setTimeout(r, 5))
+            await new Promise<void>((resolve) => waiters.push(resolve))
+            // 깨어난 후 다시 큐 확인
+            if (queue.length === 0 && activeWorkers === 0) break
             continue
           }
           break
@@ -602,13 +624,13 @@ export class LGUplusClient implements ILGUplusClient {
             }
           }
 
-          // 서브폴더를 즉시 큐에 추가
+          // 서브폴더를 즉시 큐에 추가 (이벤트 기반 알림)
           for (const sub of subFolders) {
             if (!visitedFolderIds.has(sub.folderId)) {
               const subPath = entry.relativePath
                 ? `${entry.relativePath}/${sub.folderName}`
                 : sub.folderName
-              queue.push({
+              enqueue({
                 folderId: sub.folderId,
                 depth: entry.depth + 1,
                 relativePath: subPath,
@@ -648,7 +670,7 @@ export class LGUplusClient implements ILGUplusClient {
 
       for (const entry of failedEntries) {
         visitedFolderIds.delete(entry.folderId)
-        queue.push(entry)
+        enqueue(entry)
       }
       failedEntries.length = 0
 
@@ -769,53 +791,77 @@ export class LGUplusClient implements ILGUplusClient {
 
     const body = res.body
     if (!body) {
-      // ReadableStream 미지원 시 fallback
-      const buffer = Buffer.from(await res.arrayBuffer())
-      if (buffer.byteLength !== totalSize) {
+      // ReadableStream 미지원 시 fallback — 이미 메모리에 있으므로 writeFile 사용
+      const arrayBuf = await res.arrayBuffer()
+      const size = arrayBuf.byteLength
+      if (size !== totalSize) {
         throw new FileDownloadSizeMismatchError(
-          `Size mismatch: expected ${totalSize}, got ${buffer.byteLength}`,
+          `Size mismatch: expected ${totalSize}, got ${size}`,
         )
       }
-      await writeFile(destPath, buffer)
-      onProgress?.(buffer.byteLength, totalSize)
-      return { success: true, size: buffer.byteLength, filename: info.fileName }
+      const ws = createWriteStream(destPath)
+      ws.end(Buffer.from(arrayBuf))
+      await new Promise<void>((resolve, reject) => {
+        ws.on('finish', resolve)
+        ws.on('error', reject)
+      })
+      onProgress?.(size, totalSize)
+      return { success: true, size, filename: info.fileName }
     }
 
-    // 스트리밍 다운로드
-    const chunks: Buffer[] = []
+    // 스트리밍 다운로드 — 청크를 즉시 디스크에 기록하여 메모리 사용 최소화
     let downloadedBytes = 0
     const reader = body.getReader()
+    const ws = createWriteStream(destPath)
 
     // 진행 이벤트 스로틀: 200ms 간격
     let lastProgressAt = 0
     const PROGRESS_INTERVAL_MS = 200
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const chunk = Buffer.from(value)
-      chunks.push(chunk)
-      downloadedBytes += chunk.byteLength
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = Buffer.from(value)
+        downloadedBytes += chunk.byteLength
 
-      const now = Date.now()
-      if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
-        onProgress?.(downloadedBytes, totalSize)
-        lastProgressAt = now
+        // 백프레셔 처리: write가 false를 반환하면 drain 대기
+        const canContinue = ws.write(chunk)
+        if (!canContinue) {
+          await new Promise<void>((resolve) => ws.once('drain', resolve))
+        }
+
+        const now = Date.now()
+        if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
+          onProgress?.(downloadedBytes, totalSize)
+          lastProgressAt = now
+        }
       }
+
+      // 스트림 종료 대기
+      await new Promise<void>((resolve, reject) => {
+        ws.on('finish', resolve)
+        ws.on('error', reject)
+        ws.end()
+      })
+
+      if (downloadedBytes !== totalSize) {
+        // 사이즈 불일치 시 불완전 파일 삭제
+        await unlink(destPath).catch(() => {})
+        throw new FileDownloadSizeMismatchError(
+          `Size mismatch: expected ${totalSize}, got ${downloadedBytes}`,
+        )
+      }
+
+      // 최종 100% 진행 이벤트
+      onProgress?.(downloadedBytes, totalSize)
+      return { success: true, size: downloadedBytes, filename: info.fileName }
+    } catch (error) {
+      // 에러 시 writeStream 정리 및 불완전 파일 삭제
+      ws.destroy()
+      await unlink(destPath).catch(() => {})
+      throw error
     }
-
-    const buffer = Buffer.concat(chunks)
-    if (buffer.byteLength !== totalSize) {
-      throw new FileDownloadSizeMismatchError(
-        `Size mismatch: expected ${totalSize}, got ${buffer.byteLength}`,
-      )
-    }
-
-    await writeFile(destPath, buffer)
-    // 최종 100% 진행 이벤트
-    onProgress?.(buffer.byteLength, totalSize)
-
-    return { success: true, size: buffer.byteLength, filename: info.fileName }
   }
 
   async batchDownload(
@@ -831,31 +877,43 @@ export class LGUplusClient implements ILGUplusClient {
     totalSize: number
     failedFiles: LGUplusFileItem[]
   }> {
+    const concurrency = options?.concurrency ?? 3
     let success = 0
     let failed = 0
     let totalSize = 0
+    let done = 0
     const failedFiles: LGUplusFileItem[] = []
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-      try {
-        const result = await this.downloadFile(
-          file.itemId,
-          `${destDir}/${file.itemName}`,
-        )
-        if (result.success) {
-          success++
-          totalSize += result.size
-        } else {
+    // Worker pool: 공유 인덱스에서 다음 파일을 꺼내 처리
+    let nextIndex = 0
+    const processWorker = async (): Promise<void> => {
+      while (true) {
+        const idx = nextIndex++
+        if (idx >= files.length) break
+        const file = files[idx]
+        try {
+          const result = await this.downloadFile(
+            file.itemId,
+            `${destDir}/${file.itemName}`,
+          )
+          if (result.success) {
+            success++
+            totalSize += result.size
+          } else {
+            failed++
+            failedFiles.push(file)
+          }
+        } catch {
           failed++
           failedFiles.push(file)
         }
-      } catch {
-        failed++
-        failedFiles.push(file)
+        done++
+        options?.onProgress?.(done, files.length, file.itemName)
       }
-      options?.onProgress?.(i + 1, files.length, file.itemName)
     }
+
+    const workers = Array.from({ length: Math.min(concurrency, files.length) }, () => processWorker())
+    await Promise.all(workers)
 
     return { success, failed, totalSize, failedFiles }
   }

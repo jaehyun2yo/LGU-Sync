@@ -39,6 +39,18 @@ export function formatDuration(ms: number): string {
   return `~${hr}시간 ${min % 60}분`
 }
 
+export function formatElapsedTime(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const sec = Math.floor(ms / 1000)
+  if (sec < 60) return `${sec}초`
+  const min = Math.floor(sec / 60)
+  const remainSec = sec % 60
+  if (min < 60) return `${min}분 ${remainSec}초`
+  const hr = Math.floor(min / 60)
+  const remainMin = min % 60
+  return `${hr}시간 ${remainMin}분`
+}
+
 export function formatTime(dateStr: string): string {
   const d = new Date(dateStr)
   const today = new Date()
