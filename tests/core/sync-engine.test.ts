@@ -315,6 +315,7 @@ describe('SyncEngine', () => {
       expect(lguplus.downloadFile).toHaveBeenCalledWith(
         5001,
         './downloads/테스트업체/2026년/Q1/deep.dxf',
+        expect.any(Function),
       )
     })
   })
@@ -460,6 +461,7 @@ describe('SyncEngine', () => {
       expect(lguplus.downloadFile).toHaveBeenCalledWith(
         5001,
         '/tmp/sync/회사A/프로젝트/세부/test.dxf',
+        expect.any(Function),
       )
     })
 
@@ -475,6 +477,7 @@ describe('SyncEngine', () => {
       expect(lguplus.downloadFile).toHaveBeenCalledWith(
         5001,
         '/tmp/sync/회사A/test.dxf',
+        expect.any(Function),
       )
     })
 
