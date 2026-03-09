@@ -372,9 +372,12 @@ export function registerIpcHandlers(services: CoreServices): void {
       const result = await Promise.all(
         folders.map(async (f) => {
           let fileCount = 0
+          let totalSize = 0
           try {
-            const files = await lguplus.getFileList(Number(f.lguplus_folder_id))
-            fileCount = files.total
+            const files = await lguplus.getAllFiles(Number(f.lguplus_folder_id))
+            const nonFolders = files.filter((file) => !file.isFolder)
+            fileCount = nonFolders.length
+            totalSize = nonFolders.reduce((sum, file) => sum + file.itemSize, 0)
           } catch {
             // silently fail
           }
@@ -385,7 +388,7 @@ export function registerIpcHandlers(services: CoreServices): void {
             folderName: f.lguplus_folder_name,
             fileCount,
             syncedCount: syncedFiles.length,
-            totalSize: 0,
+            totalSize,
           }
         }),
       )
