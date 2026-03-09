@@ -79,6 +79,15 @@ function formatSize(bytes: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
 }
 
+function formatTimeAgo(timestamp: number): string {
+  const diffMs = Date.now() - timestamp
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return '방금 전'
+  if (diffMin < 60) return `${diffMin}분 전`
+  const diffHr = Math.floor(diffMin / 60)
+  return `${diffHr}시간 ${diffMin % 60}분 전`
+}
+
 type ResultSortField = 'success' | 'fileName' | 'fileSize'
 
 const resultComparators: Record<ResultSortField, (a: FileResult, b: FileResult) => number> = {
@@ -212,6 +221,7 @@ export function TestPage() {
   const [folders, setFolders] = useState<MigrationFolderInfo[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [cachedAt, setCachedAt] = useState<number | null>(null)
   const [tabStates, setTabStates] = useState<Record<TestTab, TabState>>(
     () => Object.fromEntries(ALL_TABS.map((t) => [t, { ...INITIAL_TAB_STATE }])) as Record<TestTab, TabState>,
   )
@@ -244,14 +254,15 @@ export function TestPage() {
     setTabStates((prev) => ({ ...prev, [targetTab]: { ...prev[targetTab], progress: data } }))
   }, []))
 
-  // Scan folders
-  const handleScan = useCallback(async () => {
+  // Scan folders (with cache support)
+  const handleScan = useCallback(async (forceRefresh = false) => {
     updateTabState(tab, { state: 'scanning', error: null, results: [], summary: null })
     try {
-      const res = await window.electronAPI.invoke('test:scan-folders')
+      const res = await window.electronAPI.invoke('test:scan-folders', { forceRefresh })
       if (res.success && res.data) {
-        setFolders(res.data)
-        const allIds = collectAllIds(res.data)
+        setFolders(res.data.folders)
+        setCachedAt(res.data.cachedAt)
+        const allIds = collectAllIds(res.data.folders)
         setSelectedIds(new Set(allIds))
         setExpandedIds(new Set())
         updateTabState(tab, { state: 'selecting' })
@@ -262,6 +273,13 @@ export function TestPage() {
       updateTabState(tab, { error: '폴더 스캔 중 오류가 발생했습니다', state: 'idle' })
     }
   }, [tab, updateTabState])
+
+  // When switching tabs, if folders already loaded and tab is idle, jump to selecting
+  useEffect(() => {
+    if (folders.length > 0 && currentTabState.state === 'idle') {
+      updateTabState(tab, { state: 'selecting' })
+    }
+  }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleFolder = useCallback((id: string, descendantIds: string[]) => {
     setSelectedIds((prev) => {
@@ -432,7 +450,7 @@ export function TestPage() {
           <button
             type="button"
             className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            onClick={handleScan}
+            onClick={() => handleScan()}
           >
             <Search className="h-4 w-4" />
             폴더 스캔 시작
@@ -470,13 +488,18 @@ export function TestPage() {
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {cachedAt && (
+                <span className="text-xs text-muted-foreground">
+                  마지막 스캔: {formatTimeAgo(cachedAt)}
+                </span>
+              )}
               <button
                 type="button"
                 className="inline-flex items-center gap-2 px-3 py-1.5 text-xs rounded border border-border hover:bg-accent transition-colors"
-                onClick={handleScan}
+                onClick={() => handleScan(true)}
               >
-                <Search className="h-3.5 w-3.5" />
-                다시 스캔
+                <RefreshCw className="h-3.5 w-3.5" />
+                새로고침
               </button>
               <button
                 type="button"
