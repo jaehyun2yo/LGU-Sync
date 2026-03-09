@@ -1,12 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { SyncEngine } from '../../src/core/sync-engine'
-
-vi.mock('node:fs/promises', () => ({
-  stat: vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })),
-}))
-
-// eslint-disable-next-line @typescript-eslint/consistent-type-imports
-const { stat: mockStat } = await vi.importMock<typeof import('node:fs/promises')>('node:fs/promises')
 import { EventBus } from '../../src/core/event-bus'
 import { Logger } from '../../src/core/logger'
 import type { IFileDetector } from '../../src/core/types/file-detector.types'
@@ -297,95 +290,6 @@ describe('SyncEngine', () => {
     })
   })
 
-  describe('downloadOnly() - local file skip', () => {
-    const fileId = 'skip-test-file'
-    const fileData = {
-      id: fileId,
-      folder_id: 'f1',
-      file_name: 'test.dxf',
-      file_path: '/test.dxf',
-      file_size: 1024,
-      status: 'detected',
-      lguplus_file_id: '5001',
-      download_path: undefined as string | undefined,
-    }
-
-    beforeEach(() => {
-      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileData }))
-      ;(config.get as ReturnType<typeof vi.fn>).mockImplementation((section: string) => {
-        if (section === 'system') return { tempDownloadPath: './downloads' }
-        if (section === 'sync') return { pollingIntervalSec: 5, maxConcurrentDownloads: 5, maxConcurrentUploads: 3, snapshotIntervalMin: 10 }
-        return {}
-      })
-    })
-
-    afterEach(() => {
-      mockStat.mockReset()
-      // Default: file not found
-      mockStat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-    })
-
-    it('로컬 파일이 존재하고 크기가 일치하면 다운로드를 스킵한다', async () => {
-      mockStat.mockResolvedValue({
-        isFile: () => true,
-        size: 1024,
-      } as any)
-
-      const result = await engine.downloadOnly(fileId)
-
-      expect(result.success).toBe(true)
-      expect(result.skipped).toBe(true)
-      expect(lguplus.downloadFile).not.toHaveBeenCalled()
-      expect(state.updateFileStatus).toHaveBeenCalledWith(
-        fileId,
-        'downloaded',
-        expect.objectContaining({ download_path: expect.any(String) }),
-      )
-    })
-
-    it('로컬 파일이 존재하지 않으면 정상 다운로드한다', async () => {
-      mockStat.mockRejectedValue(
-        Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
-      )
-
-      const result = await engine.downloadOnly(fileId)
-
-      expect(result.success).toBe(true)
-      expect(result.skipped).toBeUndefined()
-      expect(lguplus.downloadFile).toHaveBeenCalled()
-    })
-
-    it('로컬 파일 크기가 불일치하면 재다운로드한다', async () => {
-      mockStat.mockResolvedValue({
-        isFile: () => true,
-        size: 999,
-      } as any)
-
-      const result = await engine.downloadOnly(fileId)
-
-      expect(result.success).toBe(true)
-      expect(lguplus.downloadFile).toHaveBeenCalled()
-    })
-
-    it('file_size가 0이면 파일 존재만으로 스킵한다', async () => {
-      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-        ...fileData,
-        file_size: 0,
-      }))
-
-      mockStat.mockResolvedValue({
-        isFile: () => true,
-        size: 12345,
-      } as any)
-
-      const result = await engine.downloadOnly(fileId)
-
-      expect(result.success).toBe(true)
-      expect(result.skipped).toBe(true)
-      expect(lguplus.downloadFile).not.toHaveBeenCalled()
-    })
-  })
-
   describe('downloadOnly() - structured path', () => {
     it('다운로드 경로에 file_path의 폴더 구조가 반영된다', async () => {
       const fileWithSubPath = {
@@ -404,8 +308,6 @@ describe('SyncEngine', () => {
         if (section === 'system') return { tempDownloadPath: './downloads' }
         return {}
       })
-
-      mockStat.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
 
       await engine.downloadOnly('structured-path-file')
 
@@ -441,80 +343,6 @@ describe('SyncEngine', () => {
       await engine.fullSync()
 
       expect(lguplus.getAllFilesDeep).toHaveBeenCalledWith(1001)
-    })
-
-    it('기존 파일의 updatedAt이 변경되면 재동기화한다', async () => {
-      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
-        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트업체', enabled: true },
-      ])
-
-      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>).mockResolvedValue([
-        {
-          itemId: 100,
-          itemName: 'updated.dxf',
-          itemSize: 2048,
-          itemExtension: 'dxf',
-          parentFolderId: 1001,
-          updatedAt: '2026-03-08 15:00:00',
-          isFolder: false,
-        },
-      ])
-
-      // 기존 파일 레코드: 이전 updatedAt으로 completed 상태
-      ;(state.getFileByHistoryNo as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 'existing-file',
-        status: 'completed',
-        lguplus_updated_at: '2026-03-01 10:00:00',
-      })
-
-      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => ({
-        id,
-        folder_id: 'f1',
-        file_name: 'updated.dxf',
-        file_path: '/테스트업체/updated.dxf',
-        file_size: 2048,
-        status: 'detected',
-        lguplus_file_id: '100',
-      }))
-
-      const result = await engine.fullSync()
-
-      // 기존 completed 파일이지만 updatedAt이 다르므로 status를 리셋하고 재동기화
-      expect(state.updateFileStatus).toHaveBeenCalledWith(
-        'existing-file',
-        'detected',
-        expect.objectContaining({ lguplus_updated_at: '2026-03-08 15:00:00' }),
-      )
-      expect(result.newFiles).toBe(1)
-    })
-
-    it('기존 파일의 updatedAt이 동일하면 스킵한다', async () => {
-      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
-        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트업체', enabled: true },
-      ])
-
-      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>).mockResolvedValue([
-        {
-          itemId: 100,
-          itemName: 'same.dxf',
-          itemSize: 1024,
-          itemExtension: 'dxf',
-          parentFolderId: 1001,
-          updatedAt: '2026-03-01 10:00:00',
-          isFolder: false,
-        },
-      ])
-
-      ;(state.getFileByHistoryNo as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 'existing-file',
-        status: 'completed',
-        lguplus_updated_at: '2026-03-01 10:00:00',
-      })
-
-      const result = await engine.fullSync()
-
-      expect(state.saveFile).not.toHaveBeenCalled()
-      expect(result.newFiles).toBe(0)
     })
 
     it('하위 폴더 파일의 file_path에 relativePath가 반영된다', async () => {

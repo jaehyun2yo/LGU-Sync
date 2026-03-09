@@ -13,7 +13,6 @@ import type { IConfigManager } from './types/config.types'
 import type { INotificationService } from './types/notification.types'
 import type { IEventBus, EngineStatus, DetectedFile, DetectionStrategy } from './types/events.types'
 import type { ILogger } from './types/logger.types'
-import { stat } from 'node:fs/promises'
 import { v4 as uuid } from 'uuid'
 
 export interface SyncEngineDeps {
@@ -163,22 +162,8 @@ export class SyncEngine implements ISyncEngine {
     scannedFiles = files.length
 
     for (const file of files) {
-      // Check if already synced
       const existing = this.deps.state.getFileByHistoryNo(file.itemId)
-
       if (existing && existing.status === 'completed' && !options?.forceRescan) {
-        // Compare updatedAt for freshness check
-        if (existing.lguplus_updated_at === file.updatedAt) {
-          continue // Up-to-date → skip
-        }
-        // updatedAt changed → reset status and re-sync
-        this.deps.state.updateFileStatus(existing.id, 'detected', {
-          lguplus_updated_at: file.updatedAt,
-        })
-        newFiles++
-        const result = await this.syncFile(existing.id)
-        if (result.success) syncedFiles++
-        else failedFiles++
         continue
       }
 
@@ -196,7 +181,6 @@ export class SyncEngine implements ISyncEngine {
         file_size: file.itemSize,
         file_extension: file.itemExtension,
         lguplus_file_id: String(file.itemId),
-        lguplus_updated_at: file.updatedAt,
         detected_at: new Date().toISOString(),
       })
 
@@ -215,25 +199,6 @@ export class SyncEngine implements ISyncEngine {
     }
 
     try {
-      // Build destination path preserving folder structure from file_path
-      const segments = this.getPathSegments(file.file_path)
-      const subPath = segments.join('/')
-      const destPath = subPath
-        ? `${this.getTempPath()}/${subPath}/${file.file_name}`
-        : `${this.getTempPath()}/${file.file_name}`
-
-      // Check if file already exists locally
-      const checkPath = file.download_path ?? destPath
-
-      if (await this.isLocalFileValid(checkPath, file.file_size)) {
-        this.logger.info(`Download skipped (file exists): ${file.file_name}`, { fileId, path: checkPath })
-        this.deps.state.updateFileStatus(fileId, 'downloaded', {
-          download_completed_at: new Date().toISOString(),
-          download_path: checkPath,
-        })
-        return { success: true, fileId, skipped: true }
-      }
-
       this.deps.state.updateFileStatus(fileId, 'downloading', {
         download_started_at: new Date().toISOString(),
       })
@@ -250,6 +215,12 @@ export class SyncEngine implements ISyncEngine {
       const lguplusFileId = file.lguplus_file_id
         ? Number(file.lguplus_file_id)
         : file.history_no ?? 0
+
+      const segments = this.getPathSegments(file.file_path)
+      const subPath = segments.join('/')
+      const destPath = subPath
+        ? `${this.getTempPath()}/${subPath}/${file.file_name}`
+        : `${this.getTempPath()}/${file.file_name}`
 
       const downloadResult = await this.deps.retry.execute(
         () =>
@@ -441,17 +412,6 @@ export class SyncEngine implements ISyncEngine {
       this.syncFile(fileId).catch((error) => {
         this.logger.error(`Failed to sync detected file ${fileId}`, error as Error)
       })
-    }
-  }
-
-  private async isLocalFileValid(filePath: string, expectedSize: number): Promise<boolean> {
-    try {
-      const st = await stat(filePath)
-      if (!st.isFile()) return false
-      if (expectedSize > 0 && st.size !== expectedSize) return false
-      return true
-    } catch {
-      return false
     }
   }
 
