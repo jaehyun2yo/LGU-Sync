@@ -40,6 +40,7 @@ export interface CoreServices {
   notification: INotificationService
   engine: ISyncEngine
   folderDiscovery: FolderDiscovery
+  folderCache: FolderTreeCache
 }
 
 export function createCoreServices(options: CoreOptions): CoreServices {
@@ -70,7 +71,7 @@ export function createCoreServices(options: CoreOptions): CoreServices {
   const lguplusConfig = config.get('lguplus')
   const webhardConfig = config.get('webhard')
 
-  const folderCache = new FolderTreeCache()
+  const folderCache = new FolderTreeCache({ scanResultTtlMs: 30 * 60 * 1000 })
   const lguplus = new LGUplusClient(
     'https://only.webhard.co.kr',
     logger,
@@ -122,5 +123,6 @@ export function createCoreServices(options: CoreOptions): CoreServices {
     notification,
     engine,
     folderDiscovery,
+    folderCache,
   }
 }
