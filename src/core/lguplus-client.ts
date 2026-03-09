@@ -13,6 +13,9 @@ import type { IRetryManager } from './types/retry-manager.types'
 import {
   AuthLoginFailedError,
   AuthSessionExpiredError,
+  NetworkConnectionError,
+  NetworkTimeoutError,
+  ApiResponseParseError,
   FileDownloadNotFoundError,
   FileDownloadTransferError,
   FileDownloadSizeMismatchError,
@@ -250,11 +253,20 @@ export class LGUplusClient implements ILGUplusClient {
     body: Record<string, unknown>,
     retryCount = 0,
   ): Promise<WhApiResponse> {
-    const res = await fetch(`${this.baseUrl}/wh`, {
-      method: 'POST',
-      headers: this.getApiHeaders(),
-      body: JSON.stringify(body),
-    })
+    let res: Response
+    try {
+      res = await fetch(`${this.baseUrl}/wh`, {
+        method: 'POST',
+        headers: this.getApiHeaders(),
+        body: JSON.stringify(body),
+      })
+    } catch (error) {
+      const msg = (error as Error).message ?? 'fetch failed'
+      if (msg.includes('timeout') || msg.includes('ETIMEDOUT')) {
+        throw new NetworkTimeoutError(`LGU+ API timeout: ${msg}`)
+      }
+      throw new NetworkConnectionError(`LGU+ API connection failed: ${msg}`)
+    }
 
     this.updateCookies(res)
 
@@ -282,7 +294,14 @@ export class LGUplusClient implements ILGUplusClient {
       return this.handleSessionExpiry(body, retryCount)
     }
 
-    const data = JSON.parse(text) as WhApiResponse
+    let data: WhApiResponse
+    try {
+      data = JSON.parse(text) as WhApiResponse
+    } catch {
+      throw new ApiResponseParseError(
+        `Failed to parse LGU+ API response: ${text.slice(0, 200)}`,
+      )
+    }
 
     // RESULT_CODE 9999 or message contains '로그인' = session expired
     if (
@@ -460,13 +479,21 @@ export class LGUplusClient implements ILGUplusClient {
     const BATCH_SIZE = 5
     for (let i = 0; i < remainingPages.length; i += BATCH_SIZE) {
       const batch = remainingPages.slice(i, i + BATCH_SIZE)
-      const results = await Promise.all(
-        batch.map((page) => this.getFileList(folderId, { page })),
-      )
-      for (const result of results) {
-        allFiles.push(...result.items)
+      try {
+        const results = await Promise.all(
+          batch.map((page) => this.getFileList(folderId, { page })),
+        )
+        for (const result of results) {
+          allFiles.push(...result.items)
+        }
+        onProgress?.(batch[batch.length - 1], allFiles.length, total)
+      } catch (error) {
+        this.logger.warn(`Failed to fetch page batch for folder ${folderId}`, {
+          batch,
+          error: (error as Error).message,
+        })
+        break
       }
-      onProgress?.(batch[batch.length - 1], allFiles.length, total)
     }
 
     return allFiles
@@ -518,40 +545,48 @@ export class LGUplusClient implements ILGUplusClient {
 
         activeWorkers++
 
-        // 파일 목록 + 서브폴더를 동시에 가져옴
-        const [files, subFolders] = await Promise.all([
-          this.getAllFiles(entry.folderId),
-          entry.depth < maxDepth
-            ? this.getSubFolders(entry.folderId)
-            : Promise.resolve([]),
-        ])
+        try {
+          // 파일 목록 + 서브폴더를 동시에 가져옴
+          const [files, subFolders] = await Promise.all([
+            this.getAllFiles(entry.folderId),
+            entry.depth < maxDepth
+              ? this.getSubFolders(entry.folderId)
+              : Promise.resolve([]),
+          ])
 
-        // 파일 수집
-        for (const file of files) {
-          if (!file.isFolder) {
-            allFiles.push({
-              ...file,
-              relativePath: entry.relativePath || undefined,
-            })
+          // 파일 수집
+          for (const file of files) {
+            if (!file.isFolder) {
+              allFiles.push({
+                ...file,
+                relativePath: entry.relativePath || undefined,
+              })
+            }
           }
-        }
 
-        // 서브폴더를 즉시 큐에 추가
-        for (const sub of subFolders) {
-          if (!visitedFolderIds.has(sub.folderId)) {
-            const subPath = entry.relativePath
-              ? `${entry.relativePath}/${sub.folderName}`
-              : sub.folderName
-            queue.push({
-              folderId: sub.folderId,
-              depth: entry.depth + 1,
-              relativePath: subPath,
-            })
+          // 서브폴더를 즉시 큐에 추가
+          for (const sub of subFolders) {
+            if (!visitedFolderIds.has(sub.folderId)) {
+              const subPath = entry.relativePath
+                ? `${entry.relativePath}/${sub.folderName}`
+                : sub.folderName
+              queue.push({
+                folderId: sub.folderId,
+                depth: entry.depth + 1,
+                relativePath: subPath,
+              })
+            }
           }
+        } catch (error) {
+          this.logger.warn(`Failed to scan folder ${entry.folderId}, skipping`, {
+            folderId: entry.folderId,
+            relativePath: entry.relativePath,
+            error: (error as Error).message,
+          })
+        } finally {
+          activeWorkers--
+          checkDone()
         }
-
-        activeWorkers--
-        checkDone()
       }
     }
 
