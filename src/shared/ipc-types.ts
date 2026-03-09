@@ -431,7 +431,10 @@ export interface IpcChannelMap {
   'auth:status': { request: void; response: ApiResponse<AuthStatus> }
 
   // Test
-  'test:scan-folders': { request: void; response: ApiResponse<MigrationFolderInfo[]> }
+  'test:scan-folders': {
+    request: { forceRefresh?: boolean } | void
+    response: ApiResponse<{ folders: MigrationFolderInfo[]; cachedAt: number | null }>
+  }
   'test:download-only': { request: TestDownloadRequest; response: ApiResponse<TestDownloadResult> }
   'test:upload-only': { request: TestUploadRequest; response: ApiResponse<TestUploadResult> }
   'test:full-sync': { request: FullSyncRequest; response: ApiResponse<TestFullSyncResult> }

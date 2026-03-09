@@ -157,7 +157,7 @@ async function collectAllFolderPaths(
 }
 
 export function registerIpcHandlers(services: CoreServices): void {
-  const { engine, state, config, lguplus, retry, notification, folderDiscovery } = services
+  const { engine, state, config, lguplus, retry, notification, folderDiscovery, folderCache } = services
 
   // ── Sync control ──
 
@@ -650,8 +650,18 @@ export function registerIpcHandlers(services: CoreServices): void {
 
   // ── Test ──
 
-  ipcMain.handle('test:scan-folders', async () => {
+  ipcMain.handle('test:scan-folders', async (_event, request) => {
     try {
+      const forceRefresh = request?.forceRefresh ?? false
+
+      // Check cache (unless forceRefresh)
+      if (!forceRefresh) {
+        const cached = folderCache.getScanResult()
+        if (cached) {
+          return ok({ folders: cached.data, cachedAt: cached.cachedAt })
+        }
+      }
+
       // Keep DB up-to-date
       await folderDiscovery.discoverFolders()
 
@@ -693,7 +703,11 @@ export function registerIpcHandlers(services: CoreServices): void {
       const result = settled
         .filter((r): r is PromiseFulfilledResult<MigrationFolderInfo> => r.status === 'fulfilled')
         .map((r) => r.value)
-      return ok(result)
+
+      // Save to cache
+      folderCache.setScanResult(result)
+
+      return ok({ folders: result, cachedAt: null })
     } catch (e) {
       return fail('TEST_SCAN_FAILED', (e as Error).message)
     }
