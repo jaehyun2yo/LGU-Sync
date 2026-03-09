@@ -756,16 +756,56 @@ export class LGUplusClient implements ILGUplusClient {
       throw new FileDownloadTransferError(`Download failed with status ${res.status}`)
     }
 
-    const buffer = Buffer.from(await res.arrayBuffer())
-    if (buffer.byteLength !== info.fileSize) {
+    const totalSize = info.fileSize
+    await mkdir(dirname(destPath), { recursive: true })
+
+    const body = res.body
+    if (!body) {
+      // ReadableStream 미지원 시 fallback
+      const buffer = Buffer.from(await res.arrayBuffer())
+      if (buffer.byteLength !== totalSize) {
+        throw new FileDownloadSizeMismatchError(
+          `Size mismatch: expected ${totalSize}, got ${buffer.byteLength}`,
+        )
+      }
+      await writeFile(destPath, buffer)
+      onProgress?.(buffer.byteLength, totalSize)
+      return { success: true, size: buffer.byteLength, filename: info.fileName }
+    }
+
+    // 스트리밍 다운로드
+    const chunks: Buffer[] = []
+    let downloadedBytes = 0
+    const reader = body.getReader()
+
+    // 진행 이벤트 스로틀: 200ms 간격
+    let lastProgressAt = 0
+    const PROGRESS_INTERVAL_MS = 200
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = Buffer.from(value)
+      chunks.push(chunk)
+      downloadedBytes += chunk.byteLength
+
+      const now = Date.now()
+      if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
+        onProgress?.(downloadedBytes, totalSize)
+        lastProgressAt = now
+      }
+    }
+
+    const buffer = Buffer.concat(chunks)
+    if (buffer.byteLength !== totalSize) {
       throw new FileDownloadSizeMismatchError(
-        `Size mismatch: expected ${info.fileSize}, got ${buffer.byteLength}`,
+        `Size mismatch: expected ${totalSize}, got ${buffer.byteLength}`,
       )
     }
 
-    await mkdir(dirname(destPath), { recursive: true })
     await writeFile(destPath, buffer)
-    onProgress?.(buffer.byteLength, info.fileSize)
+    // 최종 100% 진행 이벤트
+    onProgress?.(buffer.byteLength, totalSize)
 
     return { success: true, size: buffer.byteLength, filename: info.fileName }
   }
