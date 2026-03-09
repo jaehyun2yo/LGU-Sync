@@ -469,7 +469,7 @@ export class LGUplusClient implements ILGUplusClient {
     const items: LGUplusFileItem[] = rawFiles.map((f) => ({
       itemId: f.ITEM_ID,
       itemName: f.ITEM_NAME,
-      itemSize: f.ITEM_SIZE,
+      itemSize: f.ITEM_SIZE ?? 0,
       itemExtension: f.ITEM_EXTENSION,
       parentFolderId: f.ITEM_PARENT_ID,
       updatedAt: f.ITEM_UPDT_DT,

@@ -6,6 +6,7 @@ import type { CoreServices } from '../core/container'
 import type { ApiResponse, IpcEventMap, MigrationFolderInfo, RealtimeTestStartRequest, RealtimeTestEvent } from '../shared/ipc-types'
 import type { ILGUplusClient, LGUplusFolderItem, LGUplusFileItem } from '../core/types/lguplus-client.types'
 import type { LogRow, LogQuery, SyncFolderRow } from '../core/db/types'
+import { FileDetector } from '../core/file-detector'
 
 function ok<T>(data: T): ApiResponse<T> {
   return { success: true, data, timestamp: new Date().toISOString() }
@@ -1132,14 +1133,25 @@ export function registerIpcHandlers(services: CoreServices): void {
       }
       realtimeTestRunning = true
       const intervalMs = request.pollingIntervalMs ?? 30000
+      const strategy = request.strategy ?? 'snapshot'
+
+      // 요청된 strategy에 맞는 임시 FileDetector 생성
+      const testDetector = new FileDetector(
+        lguplus,
+        state,
+        services.eventBus,
+        services.logger,
+        { pollingIntervalMs: intervalMs, strategy },
+      )
 
       const sendEvent = (evt: RealtimeTestEvent): void => {
         _event.sender.send('test:realtime-event', evt)
       }
 
+      const strategyLabel = strategy === 'snapshot' ? '스냅샷' : '폴링'
       sendEvent({
         type: 'started',
-        message: `실시간 감지 시작 (주기: ${intervalMs / 1000}초)`,
+        message: `실시간 감지 시작 (주기: ${intervalMs / 1000}초, 전략: ${strategyLabel})`,
         timestamp: new Date().toISOString(),
       })
 
@@ -1148,12 +1160,12 @@ export function registerIpcHandlers(services: CoreServices): void {
 
         sendEvent({
           type: 'detecting',
-          message: '새 파일 감지 중...',
+          message: `새 파일 감지 중... (${strategyLabel})`,
           timestamp: new Date().toISOString(),
         })
 
         try {
-          const detected = await detector.forceCheck()
+          const detected = await testDetector.forceCheck()
           if (detected.length === 0) return
 
           if (request.enableNotification) {

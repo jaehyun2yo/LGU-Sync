@@ -3,11 +3,13 @@ import type { ILGUplusClient, UploadHistoryItem } from './types/lguplus-client.t
 import type { IStateManager } from './types/state-manager.types'
 import type { IEventBus, DetectedFile, DetectionStrategy } from './types/events.types'
 import type { ILogger } from './types/logger.types'
+import { diffSnapshot } from './snapshot-diff'
 
 type DetectionHandler = (files: DetectedFile[], strategy: DetectionStrategy) => void
 
 export interface FileDetectorOptions {
   pollingIntervalMs?: number
+  strategy?: 'polling' | 'snapshot'
 }
 
 export class FileDetector implements IFileDetector {
@@ -16,6 +18,7 @@ export class FileDetector implements IFileDetector {
   private eventBus: IEventBus
   private logger: ILogger
   private pollingIntervalMs: number
+  private strategy: 'polling' | 'snapshot'
   private pollingTimer: ReturnType<typeof setInterval> | null = null
   private handlers: DetectionHandler[] = []
 
@@ -31,19 +34,24 @@ export class FileDetector implements IFileDetector {
     this.eventBus = eventBus
     this.logger = logger.child({ module: 'file-detector' })
     this.pollingIntervalMs = options?.pollingIntervalMs ?? 5000
+    this.strategy = options?.strategy ?? 'polling'
   }
 
   start(): void {
     if (this.pollingTimer) return
 
-    this.logger.info('Starting file detector', { intervalMs: this.pollingIntervalMs })
+    this.logger.info('Starting file detector', {
+      intervalMs: this.pollingIntervalMs,
+      strategy: this.strategy,
+    })
+
+    const pollFn =
+      this.strategy === 'snapshot' ? () => this.pollBySnapshot() : () => this.pollForFiles()
 
     // Initial poll
-    this.pollForFiles()
+    pollFn()
 
-    this.pollingTimer = setInterval(() => {
-      this.pollForFiles()
-    }, this.pollingIntervalMs)
+    this.pollingTimer = setInterval(pollFn, this.pollingIntervalMs)
   }
 
   stop(): void {
@@ -63,7 +71,7 @@ export class FileDetector implements IFileDetector {
   }
 
   async forceCheck(): Promise<DetectedFile[]> {
-    return this.pollForFiles()
+    return this.strategy === 'snapshot' ? this.pollBySnapshot() : this.pollForFiles()
   }
 
   onFilesDetected(handler: DetectionHandler): () => void {
@@ -73,6 +81,41 @@ export class FileDetector implements IFileDetector {
       if (idx !== -1) {
         this.handlers.splice(idx, 1)
       }
+    }
+  }
+
+  private async pollBySnapshot(): Promise<DetectedFile[]> {
+    try {
+      const folders = this.state.getFolders(true)
+      const allDetected: DetectedFile[] = []
+
+      for (const folder of folders) {
+        const folderId = Number(folder.lguplus_folder_id)
+        const { items } = await this.client.getFileList(folderId)
+
+        // DB에서 이 폴더의 기존 파일 ID 집합 조회
+        const existingFiles = this.state.getFilesByFolder(folder.id)
+        const knownFileIds = new Set(
+          existingFiles
+            .map((f) => Number(f.lguplus_file_id))
+            .filter((id) => !isNaN(id)),
+        )
+
+        const diff = diffSnapshot(items, knownFileIds, folder.lguplus_folder_id)
+        allDetected.push(...diff.newFiles)
+      }
+
+      if (allDetected.length > 0) {
+        this.notifyDetection(allDetected, 'snapshot')
+        this.logger.info(`Snapshot detected ${allDetected.length} new files`, {
+          count: allDetected.length,
+        })
+      }
+
+      return allDetected
+    } catch (error) {
+      this.logger.error('Snapshot polling failed', error as Error)
+      return []
     }
   }
 

@@ -260,6 +260,7 @@ export function TestPage() {
     enableDownload: true,
     enableUpload: true,
     enableNotification: true,
+    strategy: 'snapshot' as 'polling' | 'snapshot',
   })
 
   // Listen for test progress events — route to the correct tab
@@ -784,6 +785,39 @@ export function TestPage() {
                 <span className="text-sm">{label}</span>
               </label>
             ))}
+          </div>
+
+          {/* Strategy selector */}
+          <div className="flex items-center gap-6 p-4 rounded-lg border border-border bg-card">
+            <span className="text-sm font-medium">감지 전략:</span>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="strategy"
+                value="snapshot"
+                checked={realtimeOptions.strategy === 'snapshot'}
+                onChange={() =>
+                  setRealtimeOptions((prev) => ({ ...prev, strategy: 'snapshot' as const }))
+                }
+                disabled={realtimeRunning}
+                className="border-border"
+              />
+              <span className="text-sm">Snapshot (폴더 스캔)</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="strategy"
+                value="polling"
+                checked={realtimeOptions.strategy === 'polling'}
+                onChange={() =>
+                  setRealtimeOptions((prev) => ({ ...prev, strategy: 'polling' as const }))
+                }
+                disabled={realtimeRunning}
+                className="border-border"
+              />
+              <span className="text-sm">Polling (이력 기반)</span>
+            </label>
           </div>
 
           {/* Start/Stop button */}

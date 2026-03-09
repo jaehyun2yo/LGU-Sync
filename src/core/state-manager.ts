@@ -100,7 +100,7 @@ export class StateManager implements IStateManager {
         file.history_no ?? null,
         file.file_name,
         file.file_path,
-        file.file_size,
+        file.file_size ?? 0,
         file.file_extension ?? null,
         file.lguplus_file_id ?? null,
         file.lguplus_updated_at ?? null,

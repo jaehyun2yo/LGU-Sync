@@ -468,6 +468,8 @@ export interface RealtimeTestStartRequest {
   enableNotification: boolean
   /** 폴링 주기 (ms), 기본 30000 */
   pollingIntervalMs?: number
+  /** 감지 전략: snapshot (폴더 스캔) 또는 polling (이력 기반), 기본 snapshot */
+  strategy?: 'polling' | 'snapshot'
 }
 
 export interface RealtimeTestEvent {

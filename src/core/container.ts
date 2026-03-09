@@ -86,6 +86,7 @@ export function createCoreServices(options: CoreOptions): CoreServices {
   const syncConfig = config.get('sync')
   const detector = new FileDetector(lguplus, state, eventBus, logger, {
     pollingIntervalMs: syncConfig.pollingIntervalSec * 1000,
+    strategy: 'snapshot',
   })
 
   const notification = new NotificationService(eventBus, logger)
