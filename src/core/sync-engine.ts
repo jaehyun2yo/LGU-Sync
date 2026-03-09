@@ -4,6 +4,7 @@ import type {
   FullSyncResult,
   SyncResult,
 } from './types/sync-engine.types'
+import type { BatchRetryResult } from './types/retry-manager.types'
 import type { IFileDetector } from './types/file-detector.types'
 import type { ILGUplusClient } from './types/lguplus-client.types'
 import type { IWebhardUploader } from './types/webhard-uploader.types'
@@ -13,7 +14,11 @@ import type { IConfigManager } from './types/config.types'
 import type { INotificationService } from './types/notification.types'
 import type { IEventBus, EngineStatus, DetectedFile, DetectionStrategy } from './types/events.types'
 import type { ILogger } from './types/logger.types'
-import { v4 as uuid } from 'uuid'
+import {
+  SyncAppError,
+  FileDownloadTransferError,
+  FileUploadError,
+} from './errors'
 
 export interface SyncEngineDeps {
   detector: IFileDetector
@@ -27,15 +32,24 @@ export interface SyncEngineDeps {
   notification: INotificationService
 }
 
+const DEFAULT_MAX_CONCURRENT = 5
+
 export class SyncEngine implements ISyncEngine {
   private _status: EngineStatus = 'idle'
   private deps: SyncEngineDeps
   private logger: ILogger
   private detectionUnsubscribe?: () => void
 
+  /** 진행 중인 동기화 Promise 추적 */
+  private activeSyncs = new Set<Promise<SyncResult>>()
+  /** 동시성 제한 초과 시 대기 큐 */
+  private syncQueue: DetectedFile[] = []
+  private maxConcurrent: number
+
   constructor(deps: SyncEngineDeps) {
     this.deps = deps
     this.logger = deps.logger.child({ module: 'sync-engine' })
+    this.maxConcurrent = this.getMaxConcurrent()
   }
 
   get status(): EngineStatus {
@@ -73,6 +87,15 @@ export class SyncEngine implements ISyncEngine {
     // Stop the detector
     this.deps.detector.stop()
 
+    // Clear pending queue
+    this.syncQueue.length = 0
+
+    // Graceful shutdown: 진행 중인 작업 완료 대기
+    if (this.activeSyncs.size > 0) {
+      this.logger.info(`Waiting for ${this.activeSyncs.size} active sync(s) to complete`)
+      await Promise.allSettled([...this.activeSyncs])
+    }
+
     this._status = 'stopped'
     this.deps.eventBus.emit('engine:status', { prev, next: 'stopped' })
 
@@ -98,6 +121,10 @@ export class SyncEngine implements ISyncEngine {
     this.deps.eventBus.emit('engine:status', { prev, next: 'syncing' })
 
     this.deps.detector.start()
+
+    // Resume queued items
+    this.drainQueue()
+
     this.logger.info('SyncEngine resumed')
   }
 
@@ -161,13 +188,15 @@ export class SyncEngine implements ISyncEngine {
     )
     scannedFiles = files.length
 
+    // 새 파일 ID를 먼저 수집
+    const newFileIds: string[] = []
     for (const file of files) {
       const existing = this.deps.state.getFileByHistoryNo(file.itemId)
       if (existing && existing.status === 'completed' && !options?.forceRescan) {
         continue
       }
 
-      // In-progress file → skip
+      // In-progress file -> skip
       if (existing) continue
 
       newFiles++
@@ -184,9 +213,24 @@ export class SyncEngine implements ISyncEngine {
         detected_at: new Date().toISOString(),
       })
 
-      const result = await this.syncFile(fileId)
-      if (result.success) syncedFiles++
-      else failedFiles++
+      newFileIds.push(fileId)
+    }
+
+    // Worker pool로 병렬 동기화
+    let nextIdx = 0
+    const processWorker = async (): Promise<void> => {
+      while (true) {
+        const idx = nextIdx++
+        if (idx >= newFileIds.length) break
+        const result = await this.syncFile(newFileIds[idx])
+        if (result.success) syncedFiles++
+        else failedFiles++
+      }
+    }
+
+    const workerCount = Math.min(this.maxConcurrent, newFileIds.length)
+    if (workerCount > 0) {
+      await Promise.all(Array.from({ length: workerCount }, () => processWorker()))
     }
 
     return { scannedFiles, newFiles, syncedFiles, failedFiles }
@@ -241,7 +285,7 @@ export class SyncEngine implements ISyncEngine {
         this.deps.state.updateFileStatus(fileId, 'dl_failed', {
           last_error: 'Download failed',
         })
-        this.deps.eventBus.emit('sync:failed', { error: { message: 'Download failed' } as any, fileId })
+        this.emitSyncFailed('Download failed', fileId)
         return { success: false, fileId, error: 'Download failed' }
       }
 
@@ -258,7 +302,7 @@ export class SyncEngine implements ISyncEngine {
         last_error: errMsg,
         retry_count: (file.retry_count ?? 0) + 1,
       })
-      this.deps.eventBus.emit('sync:failed', { error: error as any, fileId })
+      this.emitSyncFailed(error, fileId)
       this.logger.error(`Download failed for file ${fileId}`, error as Error)
       return { success: false, fileId, error: errMsg }
     }
@@ -333,11 +377,12 @@ export class SyncEngine implements ISyncEngine {
       )
 
       if (!uploadResult.success) {
+        const errMsg = uploadResult.error ?? 'Upload failed'
         this.deps.state.updateFileStatus(fileId, 'ul_failed', {
-          last_error: uploadResult.error ?? 'Upload failed',
+          last_error: errMsg,
         })
-        this.deps.eventBus.emit('sync:failed', { error: { message: uploadResult.error ?? 'Upload failed' } as any, fileId })
-        return { success: false, fileId, error: 'Upload failed' }
+        this.emitSyncFailed(errMsg, fileId)
+        return { success: false, fileId, error: errMsg }
       }
 
       this.deps.state.updateFileStatus(fileId, 'completed', {
@@ -356,7 +401,7 @@ export class SyncEngine implements ISyncEngine {
         last_error: errMsg,
         retry_count: (file.retry_count ?? 0) + 1,
       })
-      this.deps.eventBus.emit('sync:failed', { error: error as any, fileId })
+      this.emitSyncFailed(error, fileId)
       this.logger.error(`Upload failed for file ${fileId}`, error as Error)
       return { success: false, fileId, error: errMsg }
     }
@@ -392,6 +437,28 @@ export class SyncEngine implements ISyncEngine {
     return { success: true, fileId }
   }
 
+  async retryAllDlq(): Promise<BatchRetryResult> {
+    const items = this.deps.state.getDlqItems()
+    const retryable = items.filter((i) => i.can_retry)
+
+    let succeeded = 0
+    let failed = 0
+
+    for (const item of retryable) {
+      try {
+        const fileId = item.file_id ?? item.file_name
+        await this.syncFile(fileId)
+        this.deps.state.removeDlqItem(item.id)
+        succeeded++
+      } catch (error) {
+        this.logger.error(`DLQ retry failed for item ${item.id}`, error as Error)
+        failed++
+      }
+    }
+
+    return { total: retryable.length, succeeded, failed }
+  }
+
   /** operCode에 따라 파일 동기화(UP/CP) 또는 이벤트 로깅을 수행 */
   private handleDetectedFiles(files: DetectedFile[], strategy: DetectionStrategy): void {
     if (this._status !== 'syncing') return
@@ -401,13 +468,13 @@ export class SyncEngine implements ISyncEngine {
     for (const detected of files) {
       const { operCode } = detected
 
-      // 파일 업로드/복사 → 기존 다운로드+업로드 동기화
+      // 파일 업로드/복사 -> 다운로드+업로드 동기화
       if (operCode === 'UP' || operCode === 'CP') {
-        this.handleFileUpload(detected)
+        this.enqueueFileSync(detected)
         continue
       }
 
-      // 폴더/파일 변경 이벤트 → 로깅만 (삭제, 이동, 이름변경 등)
+      // 폴더/파일 변경 이벤트 -> 로깅만 (삭제, 이동, 이름변경 등)
       this.logger.info(`Event [${operCode}] ${detected.fileName}`, {
         operCode,
         filePath: detected.filePath,
@@ -417,8 +484,18 @@ export class SyncEngine implements ISyncEngine {
     }
   }
 
-  /** UP/CP operCode: 새 파일을 다운로드 → 업로드 동기화 */
-  private handleFileUpload(detected: DetectedFile): void {
+  /** 동시성 제어: 파일 동기화를 큐에 넣고 슬롯이 비면 실행 */
+  private enqueueFileSync(detected: DetectedFile): void {
+    if (this.activeSyncs.size >= this.maxConcurrent) {
+      this.syncQueue.push(detected)
+      return
+    }
+
+    this.startFileSync(detected)
+  }
+
+  /** 개별 파일 동기화 시작 및 추적 */
+  private startFileSync(detected: DetectedFile): void {
     // Map LGU+ folder ID to internal UUID
     const folder = this.deps.state.getFolderByLguplusId(detected.folderId)
     if (!folder) {
@@ -438,15 +515,54 @@ export class SyncEngine implements ISyncEngine {
       detected_at: new Date().toISOString(),
     })
 
-    // Queue for sync
-    this.syncFile(fileId).catch((error) => {
-      this.logger.error(`Failed to sync detected file ${fileId}`, error as Error)
-    })
+    // 추적 가능한 Promise로 동기화 실행
+    const syncPromise = this.syncFile(fileId)
+      .catch((error) => {
+        this.logger.error(`Failed to sync detected file ${fileId}`, error as Error)
+        return { success: false, fileId, error: (error as Error).message } as SyncResult
+      })
+      .finally(() => {
+        this.activeSyncs.delete(syncPromise)
+        this.drainQueue()
+      })
+
+    this.activeSyncs.add(syncPromise)
+  }
+
+  /** 큐에서 다음 항목을 꺼내 실행 */
+  private drainQueue(): void {
+    while (this.syncQueue.length > 0 && this.activeSyncs.size < this.maxConcurrent) {
+      if (this._status !== 'syncing') break
+      const next = this.syncQueue.shift()!
+      this.startFileSync(next)
+    }
+  }
+
+  /** Error 또는 문자열을 SyncAppError로 래핑하여 sync:failed 이벤트 발행 */
+  private emitSyncFailed(errorOrMsg: unknown, fileId: string): void {
+    let syncError: SyncAppError
+    if (errorOrMsg instanceof SyncAppError) {
+      syncError = errorOrMsg
+    } else if (errorOrMsg instanceof Error) {
+      syncError = new FileDownloadTransferError(errorOrMsg.message, { fileId })
+    } else {
+      syncError = new FileUploadError(String(errorOrMsg), { fileId })
+    }
+    this.deps.eventBus.emit('sync:failed', { error: syncError, fileId })
   }
 
   private getPathSegments(filePath: string): string[] {
     const parts = filePath.split('/').filter(Boolean)
     return parts.slice(0, -1) // exclude filename
+  }
+
+  private getMaxConcurrent(): number {
+    try {
+      const syncConfig = this.deps.config.get('sync')
+      return syncConfig.maxConcurrentDownloads ?? DEFAULT_MAX_CONCURRENT
+    } catch {
+      return DEFAULT_MAX_CONCURRENT
+    }
   }
 
   private getTempPath(): string {

@@ -52,16 +52,25 @@ export interface EventMap {
   'session:expired': { reason: string }
   'session:renewed': { method: 'http' | 'playwright' }
   'engine:status': { prev: EngineStatus; next: EngineStatus }
+  /** @deprecated sync:progress의 phase='downloading'으로 대체. 향후 제거 예정. */
   'download:progress': {
     fileId: string
     downloadedBytes: number
     totalBytes: number
   }
+  /** @deprecated sync:progress의 phase='uploading'으로 대체. 향후 제거 예정. */
   'upload:progress': {
     fileId: string
     uploadedBytes: number
     totalBytes: number
   }
+}
+
+/** LGU+ 클라이언트 세션 이벤트 타입 맵 */
+export interface LGUplusSessionEventMap {
+  'session-expired': { reason: string }
+  'session-refreshed': void
+  'login-required': void
 }
 
 export interface IEventBus {

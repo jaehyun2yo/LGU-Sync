@@ -10,6 +10,7 @@ import type {
 } from './types/lguplus-client.types'
 import type { ILogger } from './types/logger.types'
 import type { IRetryManager } from './types/retry-manager.types'
+import type { LGUplusSessionEventMap } from './types/events.types'
 import {
   AuthLoginFailedError,
   AuthSessionExpiredError,
@@ -25,7 +26,7 @@ import { createWriteStream } from 'node:fs'
 import { dirname } from 'node:path'
 import type { FolderTreeCache } from './folder-tree-cache'
 
-type SessionEventHandler = (...args: unknown[]) => void
+type SessionEventHandler = (data: LGUplusSessionEventMap[keyof LGUplusSessionEventMap]) => void
 
 /** Raw /wh API response shape */
 interface WhApiResponse {
@@ -197,7 +198,7 @@ export class LGUplusClient implements ILGUplusClient {
       return { success: false, message: 'Login verification failed' }
     } catch (err) {
       this.logger.error('Login exception', { error: (err as Error).message })
-      throw new AuthLoginFailedError(`Login failed: ${(err as Error).message}`)
+      throw new AuthLoginFailedError(`Login failed: ${(err as Error).message}`, { userId })
     }
   }
 
@@ -254,113 +255,136 @@ export class LGUplusClient implements ILGUplusClient {
   // Core API: POST /wh
   // ══════════════════════════════════════════════════
 
-  private async callWhApi(
-    body: Record<string, unknown>,
-    retryCount = 0,
-    networkRetry = 0,
-  ): Promise<WhApiResponse> {
-    let res: Response
-    try {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+  private async callWhApi(body: Record<string, unknown>): Promise<WhApiResponse> {
+    const MAX_SESSION_RETRIES = 1
+
+    for (let sessionAttempt = 0; sessionAttempt <= MAX_SESSION_RETRIES; sessionAttempt++) {
+      // 네트워크 재시도 루프
+      let lastNetworkError: Error | undefined
+      let res: Response | undefined
+
+      for (let networkAttempt = 0; networkAttempt <= NETWORK_MAX_RETRIES; networkAttempt++) {
+        try {
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+          try {
+            res = await fetch(`${this.baseUrl}/wh`, {
+              method: 'POST',
+              headers: this.getApiHeaders(),
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            })
+          } finally {
+            clearTimeout(timeoutId)
+          }
+          lastNetworkError = undefined
+          break
+        } catch (error) {
+          const msg = (error as Error).message ?? 'fetch failed'
+          const isTimeout =
+            (error as Error).name === 'AbortError' ||
+            msg.includes('timeout') ||
+            msg.includes('ETIMEDOUT')
+
+          lastNetworkError = isTimeout
+            ? new NetworkTimeoutError(`LGU+ API timeout: ${msg}`, { url: this.baseUrl })
+            : new NetworkConnectionError(`LGU+ API connection failed: ${msg}`, { url: this.baseUrl })
+
+          if (networkAttempt < NETWORK_MAX_RETRIES) {
+            const delay = NETWORK_BASE_DELAY_MS * Math.pow(2, networkAttempt)
+            this.logger.warn(`Network error, retrying (${networkAttempt + 1}/${NETWORK_MAX_RETRIES})`, {
+              error: msg,
+              delayMs: delay,
+            })
+            await new Promise((r) => setTimeout(r, delay))
+          }
+        }
+      }
+
+      if (lastNetworkError || !res) {
+        throw lastNetworkError ?? new NetworkConnectionError('LGU+ API connection failed', { url: this.baseUrl })
+      }
+
+      this.updateCookies(res)
+
+      // 세션 만료 감지: redirect to /login 또는 401
+      const needsSessionRefresh = this.detectSessionExpiry(res)
+      if (needsSessionRefresh === 'redirect') {
+        if (sessionAttempt < MAX_SESSION_RETRIES && await this.handleSessionExpiry('HTTP redirect to /login')) {
+          continue
+        }
+        throw new AuthSessionExpiredError('Session expired: re-login failed', { url: this.baseUrl })
+      }
+
+      if (needsSessionRefresh === '401') {
+        if (sessionAttempt < MAX_SESSION_RETRIES && await this.handleSessionExpiry('HTTP 401')) {
+          continue
+        }
+        throw new AuthSessionExpiredError('Session expired: re-login failed', { url: this.baseUrl })
+      }
+
+      const text = await res.text()
+
+      // 빈 응답
+      if (!text.trim()) {
+        return { RESULT_CODE: '0000', RESULT_MSG: 'OK (empty response)' }
+      }
+
+      // HTML 응답 = 세션 만료
+      if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
+        if (sessionAttempt < MAX_SESSION_RETRIES && await this.handleSessionExpiry('HTML response instead of JSON')) {
+          continue
+        }
+        throw new AuthSessionExpiredError('Session expired: re-login failed', { url: this.baseUrl })
+      }
+
+      let data: WhApiResponse
       try {
-        res = await fetch(`${this.baseUrl}/wh`, {
-          method: 'POST',
-          headers: this.getApiHeaders(),
-          body: JSON.stringify(body),
-          signal: controller.signal,
+        data = JSON.parse(text) as WhApiResponse
+      } catch {
+        throw new ApiResponseParseError(
+          `Failed to parse LGU+ API response: ${text.slice(0, 200)}`,
+          { responsePreview: text.slice(0, 200) },
+        )
+      }
+
+      // RESULT_CODE 9999 또는 '로그인' 메시지 = 세션 만료
+      if (
+        data.RESULT_CODE === '9999' ||
+        (data.RESULT_MSG && data.RESULT_MSG.includes('로그인'))
+      ) {
+        if (sessionAttempt < MAX_SESSION_RETRIES && await this.handleSessionExpiry(`RESULT_CODE=${data.RESULT_CODE}`)) {
+          continue
+        }
+        throw new AuthSessionExpiredError('Session expired: re-login failed', {
+          resultCode: data.RESULT_CODE,
+          resultMsg: data.RESULT_MSG,
         })
-      } finally {
-        clearTimeout(timeoutId)
-      }
-    } catch (error) {
-      const msg = (error as Error).message ?? 'fetch failed'
-      const isTimeout =
-        (error as Error).name === 'AbortError' ||
-        msg.includes('timeout') ||
-        msg.includes('ETIMEDOUT')
-
-      const networkError = isTimeout
-        ? new NetworkTimeoutError(`LGU+ API timeout: ${msg}`)
-        : new NetworkConnectionError(`LGU+ API connection failed: ${msg}`)
-
-      if (networkRetry < NETWORK_MAX_RETRIES) {
-        const delay = NETWORK_BASE_DELAY_MS * Math.pow(2, networkRetry)
-        this.logger.warn(`Network error, retrying (${networkRetry + 1}/${NETWORK_MAX_RETRIES})`, {
-          error: msg,
-          delayMs: delay,
-        })
-        await new Promise((r) => setTimeout(r, delay))
-        return this.callWhApi(body, retryCount, networkRetry + 1)
       }
 
-      throw networkError
+      return data
     }
 
-    this.updateCookies(res)
-
-    // Detect session expiry: redirect to /login
-    if (res.status === 301 || res.status === 302) {
-      const location = res.headers.get('location') ?? ''
-      if (location.includes('/login')) {
-        return this.handleSessionExpiry(body, retryCount)
-      }
-    }
-
-    if (res.status === 401) {
-      return this.handleSessionExpiry(body, retryCount)
-    }
-
-    const text = await res.text()
-
-    // Empty response
-    if (!text.trim()) {
-      return { RESULT_CODE: '0000', RESULT_MSG: 'OK (empty response)' }
-    }
-
-    // HTML response = session expired
-    if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
-      return this.handleSessionExpiry(body, retryCount)
-    }
-
-    let data: WhApiResponse
-    try {
-      data = JSON.parse(text) as WhApiResponse
-    } catch {
-      throw new ApiResponseParseError(
-        `Failed to parse LGU+ API response: ${text.slice(0, 200)}`,
-      )
-    }
-
-    // RESULT_CODE 9999 or message contains '로그인' = session expired
-    if (
-      data.RESULT_CODE === '9999' ||
-      (data.RESULT_MSG && data.RESULT_MSG.includes('로그인'))
-    ) {
-      return this.handleSessionExpiry(body, retryCount)
-    }
-
-    return data
+    throw new AuthSessionExpiredError('Session expired: max retries exceeded', { url: this.baseUrl })
   }
 
-  private async handleSessionExpiry(
-    originalBody: Record<string, unknown>,
-    retryCount: number,
-  ): Promise<WhApiResponse> {
+  /** Response에서 세션 만료 여부를 판별 */
+  private detectSessionExpiry(res: Response): 'redirect' | '401' | null {
+    if (res.status === 301 || res.status === 302) {
+      const location = res.headers.get('location') ?? ''
+      if (location.includes('/login')) return 'redirect'
+    }
+    if (res.status === 401) return '401'
+    return null
+  }
+
+  /** 세션 만료 시 재로그인 시도. 성공하면 true, 실패하면 false */
+  private async handleSessionExpiry(reason: string): Promise<boolean> {
     this.authenticated = false
-    this.emitEvent('session-expired')
+    this.emitEvent('session-expired', { reason })
 
-    if (retryCount >= 1) {
-      throw new AuthSessionExpiredError('Session expired: re-login failed')
-    }
-
-    this.logger.warn('Session expired, attempting re-login')
-    const refreshed = await this.refreshSession()
-    if (!refreshed) {
-      throw new AuthSessionExpiredError('Session expired: re-login failed')
-    }
-
-    return this.callWhApi(originalBody, retryCount + 1)
+    this.logger.warn('Session expired, attempting re-login', { reason })
+    return this.refreshSession()
   }
 
   // ══════════════════════════════════════════════════
@@ -710,7 +734,7 @@ export class LGUplusClient implements ILGUplusClient {
 
       if (res.status === 404) return null
       if (res.status === 302 || res.status === 401) {
-        this.emitEvent('session-expired')
+        this.emitEvent('session-expired', { reason: `Download URL fetch returned ${res.status}` })
         return null
       }
 
@@ -780,10 +804,10 @@ export class LGUplusClient implements ILGUplusClient {
     })
 
     if (res.status === 404) {
-      throw new FileDownloadNotFoundError(`File ${fileId} not found on server`)
+      throw new FileDownloadNotFoundError(`File ${fileId} not found on server`, { fileId })
     }
     if (!res.ok) {
-      throw new FileDownloadTransferError(`Download failed with status ${res.status}`)
+      throw new FileDownloadTransferError(`Download failed with status ${res.status}`, { fileId, status: res.status })
     }
 
     const totalSize = info.fileSize
@@ -797,6 +821,7 @@ export class LGUplusClient implements ILGUplusClient {
       if (size !== totalSize) {
         throw new FileDownloadSizeMismatchError(
           `Size mismatch: expected ${totalSize}, got ${size}`,
+          { fileId, expected: totalSize, actual: size },
         )
       }
       const ws = createWriteStream(destPath)
@@ -822,11 +847,10 @@ export class LGUplusClient implements ILGUplusClient {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = Buffer.from(value)
-        downloadedBytes += chunk.byteLength
+        downloadedBytes += value.byteLength
 
         // 백프레셔 처리: write가 false를 반환하면 drain 대기
-        const canContinue = ws.write(chunk)
+        const canContinue = ws.write(value)
         if (!canContinue) {
           await new Promise<void>((resolve) => ws.once('drain', resolve))
         }
@@ -850,6 +874,7 @@ export class LGUplusClient implements ILGUplusClient {
         await unlink(destPath).catch(() => {})
         throw new FileDownloadSizeMismatchError(
           `Size mismatch: expected ${totalSize}, got ${downloadedBytes}`,
+          { fileId, expected: totalSize, actual: downloadedBytes },
         )
       }
 
@@ -970,21 +995,24 @@ export class LGUplusClient implements ILGUplusClient {
   // Events
   // ══════════════════════════════════════════════════
 
-  on(
-    event: 'session-expired' | 'session-refreshed' | 'login-required',
-    handler: (...args: unknown[]) => void,
+  on<K extends keyof LGUplusSessionEventMap>(
+    event: K,
+    handler: (data: LGUplusSessionEventMap[K]) => void,
   ): void {
     if (!this.eventHandlers.has(event)) {
       this.eventHandlers.set(event, [])
     }
-    this.eventHandlers.get(event)!.push(handler)
+    this.eventHandlers.get(event)!.push(handler as SessionEventHandler)
   }
 
-  private emitEvent(event: string, ...args: unknown[]): void {
+  private emitEvent<K extends keyof LGUplusSessionEventMap>(
+    event: K,
+    ...args: LGUplusSessionEventMap[K] extends void ? [] : [LGUplusSessionEventMap[K]]
+  ): void {
     const handlers = this.eventHandlers.get(event)
     if (handlers) {
       for (const handler of handlers) {
-        handler(...args)
+        handler(args[0] as LGUplusSessionEventMap[keyof LGUplusSessionEventMap])
       }
     }
   }

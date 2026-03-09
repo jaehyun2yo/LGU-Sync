@@ -37,6 +37,7 @@ export interface BatchRetryResult {
 export interface IRetryManager {
   execute<T>(fn: () => Promise<T>, options?: RetryOptions): Promise<T>
   getCircuitState(name: string): CircuitState
+  resetCircuit(name: string): void
   getDlqItems(): DlqItem[]
   retryDlqItem(id: number): Promise<void>
   retryAllDlq(): Promise<BatchRetryResult>

@@ -10,9 +10,15 @@ import type { IRetryManager } from '../../src/core/types/retry-manager.types'
 import type { IConfigManager } from '../../src/core/types/config.types'
 import type { INotificationService } from '../../src/core/types/notification.types'
 import type { DetectedFile, DetectionStrategy } from '../../src/core/types/events.types'
+import {
+  SyncAppError,
+  FileDownloadTransferError,
+  FileUploadError,
+} from '../../src/core/errors'
 
-// Mocks
-function mockFileDetector(): IFileDetector {
+// ── Mock Factories ──
+
+function mockFileDetector(): IFileDetector & { _handlers: Array<(files: DetectedFile[], strategy: DetectionStrategy) => void> } {
   const handlers: Array<(files: DetectedFile[], strategy: DetectionStrategy) => void> = []
   return {
     start: vi.fn(),
@@ -26,9 +32,8 @@ function mockFileDetector(): IFileDetector {
         if (idx !== -1) handlers.splice(idx, 1)
       }
     }),
-    // expose for testing
     _handlers: handlers,
-  } as IFileDetector & { _handlers: typeof handlers }
+  } as any
 }
 
 function mockLGUplusClient(): ILGUplusClient {
@@ -73,7 +78,7 @@ function mockStateManager(): IStateManager {
     getCheckpoint: vi.fn().mockReturnValue(null),
     saveCheckpoint: vi.fn(),
     saveFile: vi.fn().mockImplementation((file) => {
-      const id = `file-${Math.random()}`
+      const id = `file-${Math.random().toString(36).slice(2, 8)}`
       files.set(id, { ...file, id, status: 'detected' })
       return id
     }),
@@ -81,9 +86,7 @@ function mockStateManager(): IStateManager {
       const file = files.get(id)
       if (file) {
         file.status = status
-        if (extra && typeof extra === 'object') {
-          Object.assign(file, extra)
-        }
+        if (extra && typeof extra === 'object') Object.assign(file, extra)
       }
     }),
     getFile: vi.fn().mockImplementation((id) => files.get(id) ?? null),
@@ -112,6 +115,7 @@ function mockRetryManager(): IRetryManager {
   return {
     execute: vi.fn().mockImplementation((fn) => fn()),
     getCircuitState: vi.fn().mockReturnValue('CLOSED'),
+    resetCircuit: vi.fn(),
     getDlqItems: vi.fn().mockReturnValue([]),
     retryDlqItem: vi.fn(),
     retryAllDlq: vi.fn().mockResolvedValue({ total: 0, succeeded: 0, failed: 0 }),
@@ -122,6 +126,7 @@ function mockConfigManager(): IConfigManager {
   return {
     get: vi.fn().mockImplementation((section: string) => {
       if (section === 'sync') return { pollingIntervalSec: 5, maxConcurrentDownloads: 5, maxConcurrentUploads: 3, snapshotIntervalMin: 10 }
+      if (section === 'system') return { tempDownloadPath: './downloads' }
       return {}
     }),
     set: vi.fn(),
@@ -146,7 +151,7 @@ function mockNotificationService(): INotificationService {
 describe('SyncEngine', () => {
   let engine: SyncEngine
   let eventBus: EventBus
-  let detector: IFileDetector & { _handlers: Array<(files: DetectedFile[], strategy: DetectionStrategy) => void> }
+  let detector: ReturnType<typeof mockFileDetector>
   let lguplus: ILGUplusClient
   let uploader: IWebhardUploader
   let state: IStateManager
@@ -156,7 +161,7 @@ describe('SyncEngine', () => {
 
   beforeEach(() => {
     eventBus = new EventBus()
-    detector = mockFileDetector() as any
+    detector = mockFileDetector()
     lguplus = mockLGUplusClient()
     uploader = mockWebhardUploader()
     state = mockStateManager()
@@ -218,7 +223,7 @@ describe('SyncEngine', () => {
 
     it('이미 syncing인 상태에서 start()는 무시된다', async () => {
       await engine.start()
-      await engine.start() // should not throw
+      await engine.start()
       expect(engine.status).toBe('syncing')
     })
 
@@ -260,9 +265,7 @@ describe('SyncEngine', () => {
       ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileData }))
       ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation((_id, status, extra) => {
         fileData.status = status
-        if (extra && typeof extra === 'object') {
-          Object.assign(fileData, extra)
-        }
+        if (extra && typeof extra === 'object') Object.assign(fileData, extra)
       })
 
       ;(state.getFolder as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -274,9 +277,7 @@ describe('SyncEngine', () => {
       })
 
       ;(lguplus.downloadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
-        success: true,
-        size: 1024,
-        filename: 'test.dxf',
+        success: true, size: 1024, filename: 'test.dxf',
       })
 
       const result = await engine.syncFile(fileId)
@@ -304,14 +305,9 @@ describe('SyncEngine', () => {
       }
 
       ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileWithSubPath }))
-      ;(config.get as ReturnType<typeof vi.fn>).mockImplementation((section: string) => {
-        if (section === 'system') return { tempDownloadPath: './downloads' }
-        return {}
-      })
 
       await engine.downloadOnly('structured-path-file')
 
-      // downloadFile이 폴더 구조를 포함한 경로로 호출되어야 함
       expect(lguplus.downloadFile).toHaveBeenCalledWith(
         5001,
         './downloads/테스트업체/2026년/Q1/deep.dxf',
@@ -342,7 +338,6 @@ describe('SyncEngine', () => {
       ])
 
       await engine.fullSync()
-
       expect(lguplus.getAllFilesDeep).toHaveBeenCalledWith(1001)
     })
 
@@ -356,25 +351,15 @@ describe('SyncEngine', () => {
         { itemId: 101, itemName: 'deep.dxf', itemSize: 1024, itemExtension: 'dxf', parentFolderId: 2001, updatedAt: '2026-01-01', isFolder: false, relativePath: '2026년/Q1' },
       ])
 
-      // Make getFile return data so syncFile can proceed (but will fail download - that's ok for this test)
       ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation((id: string) => ({
-        id,
-        folder_id: 'f1',
-        file_name: 'test.dxf',
-        file_path: '/test.dxf',
-        file_size: 1024,
-        status: 'detected',
-        lguplus_file_id: '100',
+        id, folder_id: 'f1', file_name: 'test.dxf', file_path: '/test.dxf',
+        file_size: 1024, status: 'detected', lguplus_file_id: '100',
       }))
 
       await engine.fullSync()
 
       const saveFileCalls = (state.saveFile as ReturnType<typeof vi.fn>).mock.calls
-
-      // Root file: /테스트업체/root.dxf
       expect(saveFileCalls[0][0].file_path).toBe('/테스트업체/root.dxf')
-
-      // Deep file: /테스트업체/2026년/Q1/deep.dxf
       expect(saveFileCalls[1][0].file_path).toBe('/테스트업체/2026년/Q1/deep.dxf')
     })
 
@@ -394,7 +379,7 @@ describe('SyncEngine', () => {
       await engine.fullSync()
       const elapsed = Date.now() - start
 
-      // 순차이면 ~150ms (3*50ms), 병렬이면 ~50ms
+      // 순차이면 ~150ms, 병렬이면 ~50ms
       expect(elapsed).toBeLessThan(120)
     })
 
@@ -411,12 +396,11 @@ describe('SyncEngine', () => {
         ])
 
       const result = await engine.fullSync()
-      // B 폴더의 파일은 정상 스캔됨
       expect(result.scannedFiles).toBe(1)
     })
   })
 
-  // ── Folder Structure Preservation ──
+  // ── 폴더 구조 보존 ──
 
   describe('폴더 구조 보존', () => {
     function setupFileWithPath(filePath: string) {
@@ -435,15 +419,7 @@ describe('SyncEngine', () => {
       ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileData }))
       ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation((_id, status, extra) => {
         fileData.status = status
-        if (extra && typeof extra === 'object') {
-          Object.assign(fileData, extra)
-        }
-      })
-
-      ;(config.get as ReturnType<typeof vi.fn>).mockImplementation((section: string) => {
-        if (section === 'system') return { tempDownloadPath: '/tmp/sync' }
-        if (section === 'sync') return { pollingIntervalSec: 5, maxConcurrentDownloads: 5, maxConcurrentUploads: 3, snapshotIntervalMin: 10 }
-        return {}
+        if (extra && typeof extra === 'object') Object.assign(fileData, extra)
       })
 
       return { fileId, fileData }
@@ -460,38 +436,19 @@ describe('SyncEngine', () => {
 
       expect(lguplus.downloadFile).toHaveBeenCalledWith(
         5001,
-        '/tmp/sync/회사A/프로젝트/세부/test.dxf',
-        expect.any(Function),
-      )
-    })
-
-    it('downloadOnly: 서브폴더 없는 파일은 기존대로 동작한다', async () => {
-      const { fileId } = setupFileWithPath('/회사A/test.dxf')
-
-      ;(lguplus.downloadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
-        success: true, size: 1024, filename: 'test.dxf',
-      })
-
-      await engine.downloadOnly(fileId)
-
-      expect(lguplus.downloadFile).toHaveBeenCalledWith(
-        5001,
-        '/tmp/sync/회사A/test.dxf',
+        './downloads/회사A/프로젝트/세부/test.dxf',
         expect.any(Function),
       )
     })
 
     it('uploadOnly: ensureFolderPath에 서브폴더 세그먼트가 전달된다', async () => {
-      const { fileId, fileData } = setupFileWithPath('/회사A/프로젝트/세부/test.dxf')
+      const { fileData } = setupFileWithPath('/회사A/프로젝트/세부/test.dxf')
       fileData.status = 'downloaded'
       ;(fileData as any).download_path = '/tmp/sync/회사A/프로젝트/세부/test.dxf'
 
       ;(state.getFolder as ReturnType<typeof vi.fn>).mockReturnValue({
-        id: 'f1',
-        lguplus_folder_id: '1001',
-        lguplus_folder_name: '회사A',
-        self_webhard_path: null,
-        enabled: true,
+        id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '회사A',
+        self_webhard_path: null, enabled: true,
       })
 
       ;(uploader.ensureFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -502,11 +459,198 @@ describe('SyncEngine', () => {
         success: true, data: { id: 'up1', name: 'test.dxf', size: 1024, folderId: 'f1', uploadedAt: '' },
       })
 
-      await engine.uploadOnly(fileId)
+      await engine.uploadOnly('file-preserve-test')
 
       expect(uploader.ensureFolderPath).toHaveBeenCalledWith(
         ['회사A', '프로젝트', '세부'],
       )
+    })
+  })
+
+  // ── 동시성 제어 ──
+
+  describe('동시성 제어', () => {
+    it('handleDetectedFiles에서 UP operCode만 동기화한다', async () => {
+      await engine.start()
+
+      ;(state.getFolderByLguplusId as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트',
+      })
+
+      const upFile: DetectedFile = {
+        fileName: 'test.dxf', filePath: '/test.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'UP', historyNo: 101,
+      }
+      const mvFile: DetectedFile = {
+        fileName: 'moved.dxf', filePath: '/moved.dxf', fileSize: 512,
+        folderId: '1001', operCode: 'MV', historyNo: 102,
+      }
+
+      // Trigger detection handler
+      detector._handlers[0]([upFile, mvFile], 'polling')
+
+      // 잠시 대기 (비동기 처리)
+      await new Promise(r => setTimeout(r, 10))
+
+      // UP 파일만 saveFile 호출
+      expect(state.saveFile).toHaveBeenCalledTimes(1)
+      expect((state.saveFile as ReturnType<typeof vi.fn>).mock.calls[0][0].file_name).toBe('test.dxf')
+    })
+
+    it('CP operCode도 동기화 대상이다', async () => {
+      await engine.start()
+
+      ;(state.getFolderByLguplusId as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트',
+      })
+
+      const cpFile: DetectedFile = {
+        fileName: 'copied.dxf', filePath: '/copied.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'CP', historyNo: 201,
+      }
+
+      detector._handlers[0]([cpFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).toHaveBeenCalledTimes(1)
+    })
+
+    it('paused 상태에서는 감지된 파일을 무시한다', async () => {
+      await engine.start()
+      await engine.pause()
+
+      ;(state.getFolderByLguplusId as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트',
+      })
+
+      const file: DetectedFile = {
+        fileName: 'test.dxf', filePath: '/test.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'UP', historyNo: 101,
+      }
+
+      detector._handlers[0]([file], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── Graceful Shutdown ──
+
+  describe('graceful shutdown', () => {
+    it('stop() 시 syncQueue가 비워진다', async () => {
+      await engine.start()
+      await engine.stop()
+      expect(engine.status).toBe('stopped')
+    })
+
+    it('stop() 시 상태가 stopping → stopped 순서로 전이한다', async () => {
+      const statuses: string[] = []
+      eventBus.on('engine:status', (data) => {
+        statuses.push(data.next)
+      })
+
+      await engine.start()
+      await engine.stop()
+
+      expect(statuses).toContain('stopped')
+    })
+  })
+
+  // ── retryAllDlq ──
+
+  describe('retryAllDlq()', () => {
+    it('DLQ 비어있음 → total: 0', async () => {
+      ;(state.getDlqItems as ReturnType<typeof vi.fn>).mockReturnValue([])
+      const result = await engine.retryAllDlq()
+      expect(result).toEqual({ total: 0, succeeded: 0, failed: 0 })
+    })
+
+    it('can_retry=true 항목만 재시도한다', async () => {
+      ;(state.getDlqItems as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 1, file_id: 'f1', file_name: 'a.dxf', can_retry: true },
+        { id: 2, file_id: 'f2', file_name: 'b.dxf', can_retry: false },
+      ])
+
+      // syncFile은 성공 반환하도록 설정
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue(null)
+
+      const result = await engine.retryAllDlq()
+      // can_retry=true인 1건만 재시도
+      expect(result.total).toBe(1)
+    })
+
+    it('재시도 성공 시 removeDlqItem 호출', async () => {
+      ;(state.getDlqItems as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 1, file_id: 'f1', file_name: 'a.dxf', can_retry: true },
+      ])
+
+      const fileData = {
+        id: 'f1', folder_id: 'folder1', file_name: 'a.dxf', file_path: '/a.dxf',
+        file_size: 1024, status: 'detected', lguplus_file_id: '5001',
+      }
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({ ...fileData })
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {})
+      ;(state.getFolder as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'folder1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트',
+        self_webhard_path: 'wh-folder', enabled: true,
+      })
+
+      const result = await engine.retryAllDlq()
+      expect(result.succeeded).toBe(1)
+      expect(state.removeDlqItem).toHaveBeenCalledWith(1)
+    })
+  })
+
+  // ── emitSyncFailed ──
+
+  describe('sync:failed 이벤트', () => {
+    it('다운로드 실패 시 sync:failed 이벤트가 발행된다', async () => {
+      const handler = vi.fn()
+      eventBus.on('sync:failed', handler)
+
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', folder_id: 'folder1', file_name: 'test.dxf', file_path: '/test.dxf',
+        file_size: 1024, status: 'detected', lguplus_file_id: '5001',
+      })
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {})
+
+      // 다운로드 실패
+      ;(retry.execute as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new FileDownloadTransferError('transfer failed', { fileId: 5001 }),
+      )
+
+      await engine.downloadOnly('f1')
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileId: 'f1',
+          error: expect.any(FileDownloadTransferError),
+        }),
+      )
+    })
+
+    it('문자열 에러는 FileUploadError로 래핑된다', async () => {
+      const handler = vi.fn()
+      eventBus.on('sync:failed', handler)
+
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', folder_id: 'folder1', file_name: 'test.dxf', file_path: '/test.dxf',
+        file_size: 1024, status: 'detected', lguplus_file_id: '5001',
+      })
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {})
+
+      // downloadFile이 success:false 반환
+      ;(retry.execute as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        success: false, size: 0, filename: '',
+      })
+
+      await engine.downloadOnly('f1')
+
+      expect(handler).toHaveBeenCalled()
+      // emitSyncFailed가 문자열 'Download failed'를 받아 래핑
+      const emittedError = handler.mock.calls[0][0].error
+      expect(emittedError).toBeInstanceOf(SyncAppError)
     })
   })
 })

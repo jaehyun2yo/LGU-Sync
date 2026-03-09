@@ -8,6 +8,7 @@ import type { IWebhardUploader } from './types/webhard-uploader.types'
 import type { IFileDetector } from './types/file-detector.types'
 import type { INotificationService } from './types/notification.types'
 import type { ISyncEngine } from './types/sync-engine.types'
+import type { IFolderTreeCache, IFolderDiscovery } from './types/folder.types'
 
 import { EventBus } from './event-bus'
 import { Logger } from './logger'
@@ -39,8 +40,8 @@ export interface CoreServices {
   detector: IFileDetector
   notification: INotificationService
   engine: ISyncEngine
-  folderDiscovery: FolderDiscovery
-  folderCache: FolderTreeCache
+  folderDiscovery: IFolderDiscovery
+  folderCache: IFolderTreeCache
 }
 
 export function createCoreServices(options: CoreOptions): CoreServices {

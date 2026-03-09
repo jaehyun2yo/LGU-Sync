@@ -1,10 +1,11 @@
 // src/core/types/lguplus-client.types.ts — [SPEC] LGU+ client contract
 // SDD Level 2: ILGUplusClient interface
 
-export interface LoginResult {
-  success: boolean
-  message?: string
-}
+import type { LGUplusSessionEventMap } from './events.types'
+
+export type LoginResult =
+  | { success: true }
+  | { success: false; message: string }
 
 export interface LGUplusFolderItem {
   folderId: number
@@ -120,8 +121,8 @@ export interface ILGUplusClient {
   }): Promise<UploadHistoryResponse>
 
   // Session events
-  on(
-    event: 'session-expired' | 'session-refreshed' | 'login-required',
-    handler: (...args: unknown[]) => void,
+  on<K extends keyof LGUplusSessionEventMap>(
+    event: K,
+    handler: (data: LGUplusSessionEventMap[K]) => void,
   ): void
 }

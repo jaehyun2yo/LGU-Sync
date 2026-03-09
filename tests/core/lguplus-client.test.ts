@@ -5,6 +5,13 @@ import { LGUplusClient } from '../../src/core/lguplus-client'
 import { Logger } from '../../src/core/logger'
 import { RetryManager } from '../../src/core/retry-manager'
 import { lguplusHandlers, resetMockSession } from '../mocks/lguplus-handlers'
+import {
+  AuthSessionExpiredError,
+  ApiResponseParseError,
+  NetworkConnectionError,
+  FileDownloadSizeMismatchError,
+  FileDownloadTransferError,
+} from '../../src/core/errors'
 
 vi.mock('node:fs/promises')
 
@@ -13,16 +20,13 @@ vi.mock('node:fs', () => {
   const { PassThrough } = require('node:stream')
   return {
     createWriteStream: vi.fn(() => {
-      // Return a writable stream that emits 'finish' on end
       const stream = new PassThrough()
-      // Track bytes written for size verification
       let bytesWritten = 0
       const originalWrite = stream.write.bind(stream)
       stream.write = (chunk: Buffer, ...args: any[]) => {
         bytesWritten += chunk.byteLength
         return originalWrite(chunk, ...args)
       }
-      // Emit 'finish' when ended
       stream.on('end', () => stream.emit('finish'))
       return stream
     }),
@@ -61,9 +65,12 @@ describe('LGUplusClient', () => {
       expect(client.isAuthenticated()).toBe(true)
     })
 
-    it('login() 실패 시 success=false 반환', async () => {
+    it('login() 실패 시 success=false와 message를 반환', async () => {
       const result = await client.login('baduser', 'badpass')
       expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.message).toBeTruthy()
+      }
       expect(client.isAuthenticated()).toBe(false)
     })
 
@@ -175,7 +182,6 @@ describe('LGUplusClient', () => {
           })
         }),
       )
-      const { FileDownloadSizeMismatchError } = await import('../../src/core/errors')
       await expect(client.downloadFile(5001, '/tmp/test.dxf')).rejects.toThrow(
         FileDownloadSizeMismatchError,
       )
@@ -187,7 +193,6 @@ describe('LGUplusClient', () => {
           return new HttpResponse(null, { status: 500 })
         }),
       )
-      const { FileDownloadTransferError } = await import('../../src/core/errors')
       await expect(client.downloadFile(5001, '/tmp/test.dxf')).rejects.toThrow(
         FileDownloadTransferError,
       )
@@ -197,6 +202,223 @@ describe('LGUplusClient', () => {
       const progress = vi.fn()
       await client.downloadFile(5001, '/tmp/test.dxf', progress)
       expect(progress).toHaveBeenCalledWith(10240, 10240)
+    })
+  })
+
+  // ── callWhApi 세션 재시도 ──
+
+  describe('callWhApi 세션 재시도', () => {
+    beforeEach(async () => {
+      await client.login('testuser', 'testpass')
+    })
+
+    it('RESULT_CODE=9999 → refreshSession → 재시도 성공', async () => {
+      let callCount = 0
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          callCount++
+          if (callCount === 1) {
+            return HttpResponse.json({
+              RESULT_CODE: '9999',
+              RESULT_MSG: '로그인이 필요합니다',
+            })
+          }
+          return HttpResponse.json({
+            RESULT_CODE: '0000',
+            RESULT_MSG: 'OK',
+            ITEM_FOLDER: [{ FOLDER_ID: 1000, FOLDER_NAME: 'HOME', UPPER_FOLDER_ID: 0 }],
+          })
+        }),
+      )
+
+      const rootId = await client.getGuestFolderRootId()
+      expect(rootId).toBe(1000)
+      expect(callCount).toBe(2)
+    })
+
+    it('세션 만료 후 refreshSession 실패 → AuthSessionExpiredError', async () => {
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          return HttpResponse.json({
+            RESULT_CODE: '9999',
+            RESULT_MSG: '로그인이 필요합니다',
+          })
+        }),
+        http.get('https://only.webhard.co.kr/login', () => {
+          return new HttpResponse('<html><title>Login</title></html>', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          })
+        }),
+        http.post('https://only.webhard.co.kr/login-process', () => {
+          return new HttpResponse(null, {
+            status: 302,
+            headers: { Location: '/login?error=1' },
+          })
+        }),
+      )
+
+      await expect(client.getGuestFolderRootId()).rejects.toThrow(AuthSessionExpiredError)
+    })
+
+    it('HTML 응답(세션 만료) → refreshSession → 재시도 성공', async () => {
+      let callCount = 0
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          callCount++
+          if (callCount === 1) {
+            return new HttpResponse('<!DOCTYPE html><html><body>Login Required</body></html>', {
+              status: 200,
+              headers: { 'Content-Type': 'text/html' },
+            })
+          }
+          return HttpResponse.json({
+            RESULT_CODE: '0000',
+            RESULT_MSG: 'OK',
+            ITEM_FOLDER: [{ FOLDER_ID: 1000, FOLDER_NAME: 'HOME' }],
+          })
+        }),
+      )
+
+      const rootId = await client.getGuestFolderRootId()
+      expect(rootId).toBe(1000)
+    })
+
+    it('JSON 파싱 실패 → ApiResponseParseError', async () => {
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          return new HttpResponse('not-json-but-not-html-either', {
+            status: 200,
+            headers: { 'Content-Type': 'text/plain' },
+          })
+        }),
+      )
+
+      await expect(client.getGuestFolderRootId()).rejects.toThrow(ApiResponseParseError)
+    })
+
+    it('빈 응답 → 에러 없이 처리', async () => {
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          return new HttpResponse('  ', {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }),
+      )
+
+      // 빈 응답 → RESULT_CODE=0000으로 처리 → 폴더 없으므로 null
+      const rootId = await client.getGuestFolderRootId()
+      expect(rootId).toBeNull()
+    })
+  })
+
+  // ── callWhApi 네트워크 재시도 ──
+
+  describe('callWhApi 네트워크 재시도', () => {
+    beforeEach(async () => {
+      await client.login('testuser', 'testpass')
+    })
+
+    it('네트워크 에러 → 재시도 후 성공', async () => {
+      let callCount = 0
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          callCount++
+          if (callCount === 1) {
+            return HttpResponse.error()
+          }
+          return HttpResponse.json({
+            RESULT_CODE: '0000',
+            RESULT_MSG: 'OK',
+            ITEM_FOLDER: [{ FOLDER_ID: 1000, FOLDER_NAME: 'HOME' }],
+          })
+        }),
+      )
+
+      const rootId = await client.getGuestFolderRootId()
+      expect(rootId).toBe(1000)
+      expect(callCount).toBeGreaterThanOrEqual(2)
+    })
+
+    it('네트워크 3회 모두 실패 → NetworkConnectionError', async () => {
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          return HttpResponse.error()
+        }),
+      )
+
+      await expect(client.getGuestFolderRootId()).rejects.toThrow(NetworkConnectionError)
+    })
+  })
+
+  // ── 세션 이벤트 ──
+
+  describe('세션 이벤트', () => {
+    it('session-expired 이벤트에 reason이 전달된다', async () => {
+      const handler = vi.fn()
+      client.on('session-expired', handler)
+
+      await client.login('testuser', 'testpass')
+
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          return HttpResponse.json({
+            RESULT_CODE: '9999',
+            RESULT_MSG: '로그인이 필요합니다',
+          })
+        }),
+        http.get('https://only.webhard.co.kr/login', () => {
+          return new HttpResponse('<html><title>Login</title></html>', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          })
+        }),
+        http.post('https://only.webhard.co.kr/login-process', () => {
+          return new HttpResponse(null, {
+            status: 302,
+            headers: { Location: '/login?error=1' },
+          })
+        }),
+      )
+
+      try {
+        await client.getGuestFolderRootId()
+      } catch {
+        // expected
+      }
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: expect.any(String) }),
+      )
+    })
+
+    it('session-refreshed 이벤트가 재로그인 성공 시 발행된다', async () => {
+      const handler = vi.fn()
+      client.on('session-refreshed', handler)
+
+      await client.login('testuser', 'testpass')
+
+      let callCount = 0
+      server.use(
+        http.post('https://only.webhard.co.kr/wh', async () => {
+          callCount++
+          if (callCount === 1) {
+            return HttpResponse.json({
+              RESULT_CODE: '9999',
+              RESULT_MSG: '로그인이 필요합니다',
+            })
+          }
+          return HttpResponse.json({
+            RESULT_CODE: '0000',
+            RESULT_MSG: 'OK',
+            ITEM_FOLDER: [],
+          })
+        }),
+      )
+
+      await client.getGuestFolderRootId()
+      expect(handler).toHaveBeenCalled()
     })
   })
 })

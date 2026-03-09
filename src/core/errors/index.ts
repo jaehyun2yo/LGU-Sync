@@ -8,11 +8,12 @@ export abstract class SyncAppError extends Error {
   abstract readonly category: ErrorCategory
   abstract readonly retryable: boolean
   readonly timestamp = Date.now()
-  context?: Record<string, unknown>
+  readonly context: Record<string, unknown>
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, context?: Record<string, unknown>, options?: ErrorOptions) {
     super(message, options)
     this.name = this.constructor.name
+    this.context = context ?? {}
   }
 }
 

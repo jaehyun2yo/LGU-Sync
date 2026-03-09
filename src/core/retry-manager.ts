@@ -6,6 +6,7 @@ interface CircuitBreakerState {
   state: CircuitState
   failureCount: number
   lastFailureTime: number
+  probeInFlight: boolean
 }
 
 export interface CircuitBreakerConfig {
@@ -50,6 +51,13 @@ export class RetryManager implements IRetryManager {
       const circuitState = this.getCircuitState(circuitName)
       if (circuitState === 'OPEN') {
         throw new Error(`Circuit breaker is OPEN for '${circuitName}'`)
+      }
+      if (circuitState === 'HALF_OPEN') {
+        const circuit = this.circuits.get(circuitName)!
+        if (circuit.probeInFlight) {
+          throw new Error(`Circuit breaker is HALF_OPEN (probe in progress) for '${circuitName}'`)
+        }
+        circuit.probeInFlight = true
       }
     }
 
@@ -115,6 +123,10 @@ export class RetryManager implements IRetryManager {
     return circuit.state
   }
 
+  resetCircuit(name: string): void {
+    this.circuits.delete(name)
+  }
+
   getDlqItems(): DlqItem[] {
     // DLQ is managed by StateManager, not RetryManager directly
     return []
@@ -157,14 +169,26 @@ export class RetryManager implements IRetryManager {
     if (circuit) {
       circuit.state = 'CLOSED'
       circuit.failureCount = 0
+      circuit.probeInFlight = false
     }
   }
 
   private recordFailure(circuitName: string): void {
     let circuit = this.circuits.get(circuitName)
     if (!circuit) {
-      circuit = { state: 'CLOSED', failureCount: 0, lastFailureTime: 0 }
+      circuit = { state: 'CLOSED', failureCount: 0, lastFailureTime: 0, probeInFlight: false }
       this.circuits.set(circuitName, circuit)
+    }
+
+    // HALF_OPEN 프로브 실패 시 다시 OPEN으로 전환
+    if (circuit.state === 'HALF_OPEN') {
+      circuit.state = 'OPEN'
+      circuit.lastFailureTime = Date.now()
+      circuit.probeInFlight = false
+      this.logger.warn(`Circuit breaker re-OPEN for '${circuitName}' (probe failed)`, {
+        failures: circuit.failureCount,
+      })
+      return
     }
 
     circuit.failureCount++

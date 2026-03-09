@@ -23,6 +23,7 @@ export class YjlaserUploader implements IWebhardUploader {
   private retry: IRetryManager
   private _connected = false
   private eventHandlers = new Map<string, EventHandler[]>()
+  private folderPathCache = new Map<string, string>()
 
   constructor(apiUrl: string, apiKey: string, logger: ILogger, retry: IRetryManager) {
     this.apiUrl = apiUrl
@@ -179,6 +180,12 @@ export class YjlaserUploader implements IWebhardUploader {
       return { success: false, error: 'Folder path segments cannot be empty' }
     }
 
+    const cacheKey = segments.join('/')
+    const cached = this.folderPathCache.get(cacheKey)
+    if (cached) {
+      return { success: true, data: cached }
+    }
+
     let parentId: string | null = null
 
     for (const segment of segments) {
@@ -194,6 +201,7 @@ export class YjlaserUploader implements IWebhardUploader {
       }
     }
 
+    this.folderPathCache.set(cacheKey, parentId!)
     return { success: true, data: parentId! }
   }
 
