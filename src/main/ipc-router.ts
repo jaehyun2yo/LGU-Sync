@@ -1,9 +1,9 @@
-import { ipcMain, shell, type BrowserWindow } from 'electron'
+import { BrowserWindow, ipcMain, shell } from 'electron'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { CoreServices } from '../core/container'
-import type { ApiResponse, IpcEventMap, MigrationFolderInfo } from '../shared/ipc-types'
+import type { ApiResponse, IpcEventMap, MigrationFolderInfo, RealtimeTestStartRequest, RealtimeTestEvent } from '../shared/ipc-types'
 import type { ILGUplusClient, LGUplusFolderItem, LGUplusFileItem } from '../core/types/lguplus-client.types'
 import type { LogRow, LogQuery, SyncFolderRow } from '../core/db/types'
 
@@ -157,7 +157,7 @@ async function collectAllFolderPaths(
 }
 
 export function registerIpcHandlers(services: CoreServices): void {
-  const { engine, state, config, lguplus, retry, notification, folderDiscovery, folderCache } = services
+  const { engine, state, config, lguplus, retry, notification, folderDiscovery, folderCache, detector } = services
 
   // ── Sync control ──
 
@@ -1120,6 +1120,167 @@ export function registerIpcHandlers(services: CoreServices): void {
     }
   })
 
+  // ── Realtime detection test ──
+
+  let realtimeTestTimer: ReturnType<typeof setInterval> | null = null
+  let realtimeTestRunning = false
+
+  ipcMain.handle('test:realtime-start', async (_event, request: RealtimeTestStartRequest) => {
+    try {
+      if (realtimeTestRunning) {
+        return fail('REALTIME_ALREADY_RUNNING', '실시간 감지가 이미 실행 중입니다.')
+      }
+      realtimeTestRunning = true
+      const intervalMs = request.pollingIntervalMs ?? 30000
+
+      const sendEvent = (evt: RealtimeTestEvent): void => {
+        _event.sender.send('test:realtime-event', evt)
+      }
+
+      sendEvent({
+        type: 'started',
+        message: `실시간 감지 시작 (주기: ${intervalMs / 1000}초)`,
+        timestamp: new Date().toISOString(),
+      })
+
+      const poll = async (): Promise<void> => {
+        if (!realtimeTestRunning) return
+
+        sendEvent({
+          type: 'detecting',
+          message: '새 파일 감지 중...',
+          timestamp: new Date().toISOString(),
+        })
+
+        try {
+          const detected = await detector.forceCheck()
+          if (detected.length === 0) return
+
+          if (request.enableNotification) {
+            const { Notification: ElectronNotification } = await import('electron')
+            new ElectronNotification({
+              title: '새 파일 감지됨',
+              body: `${detected.length}개 파일이 감지되었습니다.`,
+            }).show()
+
+            notification.notify({
+              type: 'info',
+              title: '새 파일 감지',
+              message: `${detected.length}개 파일이 감지되었습니다.`,
+              groupKey: 'realtime-detection',
+            })
+          }
+
+          for (const file of detected) {
+            sendEvent({
+              type: 'detected',
+              message: `파일 감지: ${file.fileName}`,
+              timestamp: new Date().toISOString(),
+              fileName: file.fileName,
+            })
+
+            if (!request.enableDownload && !request.enableUpload) continue
+
+            const dbFolder = state.getFolderByLguplusId(file.folderId)
+            if (!dbFolder) continue
+
+            const fileId = state.saveFile({
+              folder_id: dbFolder.id,
+              file_name: file.fileName,
+              file_path: file.filePath,
+              file_size: file.fileSize,
+              file_extension: file.fileName.split('.').pop() ?? '',
+              lguplus_file_id: String(file.historyNo),
+              detected_at: new Date().toISOString(),
+            })
+
+            if (request.enableDownload) {
+              sendEvent({
+                type: 'downloading',
+                message: `다운로드 중: ${file.fileName}`,
+                timestamp: new Date().toISOString(),
+                fileName: file.fileName,
+              })
+
+              const dlResult = await engine.downloadOnly(fileId)
+              sendEvent({
+                type: 'downloaded',
+                message: dlResult.success
+                  ? `다운로드 완료: ${file.fileName}`
+                  : `다운로드 실패: ${file.fileName}`,
+                timestamp: new Date().toISOString(),
+                fileName: file.fileName,
+                success: dlResult.success,
+                error: dlResult.error,
+              })
+
+              if (!dlResult.success) continue
+            }
+
+            if (request.enableUpload) {
+              sendEvent({
+                type: 'uploading',
+                message: `업로드 중: ${file.fileName}`,
+                timestamp: new Date().toISOString(),
+                fileName: file.fileName,
+              })
+
+              const ulResult = await engine.uploadOnly(fileId)
+              sendEvent({
+                type: 'uploaded',
+                message: ulResult.success
+                  ? `업로드 완료: ${file.fileName}`
+                  : `업로드 실패: ${file.fileName}`,
+                timestamp: new Date().toISOString(),
+                fileName: file.fileName,
+                success: ulResult.success,
+                error: ulResult.error,
+              })
+            }
+          }
+        } catch (e) {
+          sendEvent({
+            type: 'error',
+            message: `감지 오류: ${(e as Error).message}`,
+            timestamp: new Date().toISOString(),
+            error: (e as Error).message,
+          })
+        }
+      }
+
+      poll()
+      realtimeTestTimer = setInterval(poll, intervalMs)
+
+      return ok(undefined)
+    } catch (e) {
+      realtimeTestRunning = false
+      return fail('REALTIME_START_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('test:realtime-stop', async () => {
+    try {
+      if (realtimeTestTimer) {
+        clearInterval(realtimeTestTimer)
+        realtimeTestTimer = null
+      }
+      realtimeTestRunning = false
+
+      const [win] = BrowserWindow.getAllWindows()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('test:realtime-event', {
+          type: 'stopped',
+          message: '실시간 감지가 중지되었습니다.',
+          timestamp: new Date().toISOString(),
+        } satisfies RealtimeTestEvent)
+      }
+
+      return ok(undefined)
+    } catch (e) {
+      return fail('REALTIME_STOP_FAILED', (e as Error).message)
+    }
+  })
+
   // ── Notifications ──
 
   ipcMain.handle('notification:getAll', async () => {
@@ -1334,7 +1495,7 @@ export function removeAllIpcHandlers(): void {
     'files:list', 'files:detail', 'files:search',
     'folders:list', 'folders:tree', 'folders:toggle', 'folders:discover',
     'migration:scan', 'migration:start',
-    'test:scan-folders', 'test:download-only', 'test:upload-only', 'test:full-sync', 'test:open-download-folder',
+    'test:scan-folders', 'test:download-only', 'test:upload-only', 'test:full-sync', 'test:open-download-folder', 'test:realtime-start', 'test:realtime-stop',
     'logs:list', 'logs:export',
     'stats:summary', 'stats:chart',
     'settings:get', 'settings:update', 'settings:test-connection',
