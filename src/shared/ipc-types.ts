@@ -439,6 +439,14 @@ export interface IpcChannelMap {
   'test:upload-only': { request: TestUploadRequest; response: ApiResponse<TestUploadResult> }
   'test:full-sync': { request: FullSyncRequest; response: ApiResponse<TestFullSyncResult> }
   'test:open-download-folder': { request: void; response: ApiResponse<void> }
+  'test:realtime-start': {
+    request: RealtimeTestStartRequest
+    response: ApiResponse<void>
+  }
+  'test:realtime-stop': {
+    request: void
+    response: ApiResponse<void>
+  }
 
   // Failed / DLQ
   'failed:list': { request: PaginationRequest; response: ApiResponse<Paginated<FailedEvent>> }
@@ -447,6 +455,28 @@ export interface IpcChannelMap {
   'notification:getAll': { request: void; response: ApiResponse<NotificationItem[]> }
   'notification:read': { request: { id: string }; response: ApiResponse<void> }
   'notification:readAll': { request: void; response: ApiResponse<void> }
+}
+
+// ── Realtime detection test types ──
+
+export interface RealtimeTestStartRequest {
+  /** 감지 시 자동 다운로드 */
+  enableDownload: boolean
+  /** 감지 시 자동 업로드 */
+  enableUpload: boolean
+  /** 감지 시 알림 (OS + 앱 내) */
+  enableNotification: boolean
+  /** 폴링 주기 (ms), 기본 30000 */
+  pollingIntervalMs?: number
+}
+
+export interface RealtimeTestEvent {
+  type: 'started' | 'detecting' | 'detected' | 'downloading' | 'downloaded' | 'uploading' | 'uploaded' | 'error' | 'stopped'
+  message: string
+  timestamp: string
+  fileName?: string
+  success?: boolean
+  error?: string
 }
 
 // ── IPC Event Map (Main → Renderer, one-way push) ──
@@ -521,6 +551,7 @@ export interface IpcEventMap {
   'auth:expired': AuthExpiredEvent
   'error:critical': CriticalErrorEvent
   'test:progress': TestProgressEvent
+  'test:realtime-event': RealtimeTestEvent
 }
 
 // ── ElectronAPI (exposed via contextBridge) ──
