@@ -173,8 +173,9 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       activeTransfers: transfers.slice(0, 5),
       fullSyncProgress: {
         phase: event.phase,
-        progress:
-          event.totalFiles > 0 ? (event.completedFiles / event.totalFiles) * 100 : 0,
+        progress: event.totalBytes > 0
+          ? (event.completedBytes / event.totalBytes) * 100
+          : (event.totalFiles > 0 ? (event.completedFiles / event.totalFiles) * 100 : 0),
         currentFile: event.currentFile,
         speedBps: event.speedBps,
         estimatedRemainingMs: event.estimatedRemainingMs,
