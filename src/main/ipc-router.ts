@@ -1,10 +1,10 @@
 import { ipcMain, type BrowserWindow } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { CoreServices } from '../core/container'
 import type { ApiResponse, IpcEventMap, MigrationFolderInfo } from '../shared/ipc-types'
-import type { ILGUplusClient } from '../core/types/lguplus-client.types'
+import type { ILGUplusClient, LGUplusFolderItem, LGUplusFileItem } from '../core/types/lguplus-client.types'
 import type { LogRow, LogQuery } from '../core/db/types'
 
 function ok<T>(data: T): ApiResponse<T> {
@@ -73,11 +73,21 @@ async function buildSubFolderTree(
   maxDepth: number = 5,
 ): Promise<MigrationFolderInfo[]> {
   if (depth >= maxDepth) return []
-  const subFolders = await lguplusClient.getSubFolders(lguplusFolderId)
-  return Promise.all(
+  let subFolders: LGUplusFolderItem[]
+  try {
+    subFolders = await lguplusClient.getSubFolders(lguplusFolderId)
+  } catch {
+    return []
+  }
+  const results = await Promise.allSettled(
     subFolders.map(async (sf) => {
-      const files = await lguplusClient.getAllFiles(sf.folderId)
-      const fileCount = files.filter((f) => !f.isFolder).length
+      let fileCount = 0
+      try {
+        const files = await lguplusClient.getAllFilesDeep(sf.folderId)
+        fileCount = files.filter((f) => !f.isFolder).length
+      } catch {
+        // fileCount stays 0
+      }
       const children = await buildSubFolderTree(sf.folderId, lguplusClient, depth + 1, maxDepth)
       return {
         id: String(sf.folderId),
@@ -85,10 +95,38 @@ async function buildSubFolderTree(
         folderName: sf.folderName,
         fileCount,
         syncedCount: 0,
-        children: children.length > 0 ? children : undefined,
+        children,
       }
     }),
   )
+  return results
+    .filter((r): r is PromiseFulfilledResult<MigrationFolderInfo> => r.status === 'fulfilled')
+    .map((r) => r.value)
+}
+
+async function collectAllFolderPaths(
+  rootFolderId: number,
+  lguplusClient: ILGUplusClient,
+  basePath: string = '',
+  maxDepth: number = 10,
+): Promise<string[]> {
+  const paths: string[] = []
+  async function recurse(folderId: number, currentPath: string, depth: number): Promise<void> {
+    if (depth >= maxDepth) return
+    let subFolders: LGUplusFolderItem[]
+    try {
+      subFolders = await lguplusClient.getSubFolders(folderId)
+    } catch {
+      return
+    }
+    for (const sf of subFolders) {
+      const folderPath = currentPath ? `${currentPath}/${sf.folderName}` : sf.folderName
+      paths.push(folderPath)
+      await recurse(sf.folderId, folderPath, depth + 1)
+    }
+  }
+  await recurse(rootFolderId, basePath, 0)
+  return paths
 }
 
 export function registerIpcHandlers(services: CoreServices): void {
@@ -586,28 +624,38 @@ export function registerIpcHandlers(services: CoreServices): void {
 
   ipcMain.handle('test:scan-folders', async () => {
     try {
+      // Keep DB up-to-date
       await folderDiscovery.discoverFolders()
-      const folders = state.getFolders()
+
+      // Build full tree from HOME root
+      const homeId = await lguplus.getGuestFolderRootId()
+      if (!homeId) return fail('TEST_SCAN_FAILED', 'HOME folder not found')
+
+      const rootFolders = await lguplus.getSubFolders(homeId)
       const result = await Promise.all(
-        folders.map(async (f) => {
+        rootFolders.map(async (rf) => {
           let fileCount = 0
-          let children: MigrationFolderInfo[] | undefined
+          let children: MigrationFolderInfo[] = []
           try {
-            const folderId = Number(f.lguplus_folder_id)
-            const files = await lguplus.getAllFiles(folderId)
+            const files = await lguplus.getAllFilesDeep(rf.folderId)
             fileCount = files.filter((file) => !file.isFolder).length
-            const subTree = await buildSubFolderTree(folderId, lguplus)
-            children = subTree.length > 0 ? subTree : undefined
+            children = await buildSubFolderTree(rf.folderId, lguplus)
           } catch {
             // silently fail
           }
-          const syncedFiles = state.getFilesByFolder(f.id, { status: 'completed' })
+
+          // Try to match with DB folder for syncedCount
+          const dbFolder = state.getFolderByLguplusId(String(rf.folderId))
+          const syncedCount = dbFolder
+            ? state.getFilesByFolder(dbFolder.id, { status: 'completed' }).length
+            : 0
+
           return {
-            id: f.id,
-            lguplusFolderId: f.lguplus_folder_id,
-            folderName: f.lguplus_folder_name,
+            id: dbFolder?.id ?? `lguplus:${rf.folderId}`,
+            lguplusFolderId: String(rf.folderId),
+            folderName: rf.folderName,
             fileCount,
-            syncedCount: syncedFiles.length,
+            syncedCount,
             children,
           }
         }),
@@ -629,49 +677,186 @@ export function registerIpcHandlers(services: CoreServices): void {
       let failedFiles = 0
       let scannedFiles = 0
 
-      const folders = state.getFolders(true)
-      const targetFolders = request.folderIds
-        ? folders.filter((f) => request.folderIds.includes(f.id))
-        : folders
+      const sendProgress = (data: {
+        currentFile: string; completedFiles: number; totalFiles: number; phase: string; error?: string
+      }): void => {
+        _event.sender.send('test:progress', {
+          testType: 'download' as const,
+          ...data,
+        })
+      }
+
+      // Resolve target folders: support both DB UUIDs and lguplus: prefix IDs
+      interface TargetFolder {
+        id: string
+        lguplusFolderId: number
+        folderName: string
+        isDbFolder: boolean
+        dbFolderId?: string // DB UUID for engine.downloadOnly
+      }
+      const targetFolders: TargetFolder[] = []
+
+      if (request.folderIds) {
+        for (const fid of request.folderIds) {
+          if (fid.startsWith('lguplus:')) {
+            const lguplusId = Number(fid.slice('lguplus:'.length))
+            // Try to find matching DB folder
+            const dbFolder = state.getFolderByLguplusId(String(lguplusId))
+            // Need folder name - get from parent subfolders
+            const homeId = await lguplus.getGuestFolderRootId()
+            let folderName = `folder_${lguplusId}`
+            if (homeId) {
+              const rootFolders = await lguplus.getSubFolders(homeId)
+              const match = rootFolders.find((rf) => rf.folderId === lguplusId)
+              if (match) folderName = match.folderName
+            }
+            targetFolders.push({
+              id: fid,
+              lguplusFolderId: lguplusId,
+              folderName,
+              isDbFolder: !!dbFolder,
+              dbFolderId: dbFolder?.id,
+            })
+          } else {
+            const folder = state.getFolder(fid)
+            if (folder) {
+              targetFolders.push({
+                id: fid,
+                lguplusFolderId: Number(folder.lguplus_folder_id),
+                folderName: folder.lguplus_folder_name,
+                isDbFolder: true,
+                dbFolderId: fid,
+              })
+            }
+          }
+        }
+      } else {
+        const folders = state.getFolders(true)
+        for (const f of folders) {
+          targetFolders.push({
+            id: f.id,
+            lguplusFolderId: Number(f.lguplus_folder_id),
+            folderName: f.lguplus_folder_name,
+            isDbFolder: true,
+            dbFolderId: f.id,
+          })
+        }
+      }
 
       for (const folder of targetFolders) {
-        const files = await lguplus.getAllFilesDeep(Number(folder.lguplus_folder_id))
+        sendProgress({
+          currentFile: folder.folderName,
+          completedFiles: downloadedFiles,
+          totalFiles: scannedFiles,
+          phase: 'scanning',
+        })
+
+        // Create empty folder structure locally
+        const tempPath = join(tmpdir(), 'webhard-test-download')
+        const folderBasePath = join(tempPath, folder.folderName)
+        await mkdir(folderBasePath, { recursive: true })
+
+        const subPaths = await collectAllFolderPaths(
+          folder.lguplusFolderId,
+          lguplus,
+          folder.folderName,
+        )
+        for (const subPath of subPaths) {
+          await mkdir(join(tempPath, subPath), { recursive: true })
+        }
+
+        // Scan and download files
+        let files: LGUplusFileItem[]
+        try {
+          files = await lguplus.getAllFilesDeep(folder.lguplusFolderId)
+        } catch {
+          sendProgress({
+            currentFile: folder.folderName,
+            completedFiles: downloadedFiles + failedFiles,
+            totalFiles: scannedFiles,
+            phase: 'scanning',
+            error: `Failed to scan folder: ${folder.folderName}`,
+          })
+          continue
+        }
         scannedFiles += files.length
 
         for (const file of files) {
-          const existing = state.getFileByHistoryNo(file.itemId)
-          if (existing && existing.status === 'completed' && !request.forceRescan) {
-            continue
-          }
-
-          const fileId = state.saveFile({
-            folder_id: folder.id,
-            file_name: file.itemName,
-            file_path: `/${folder.lguplus_folder_name}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
-            file_size: file.itemSize,
-            file_extension: file.itemExtension,
-            lguplus_file_id: String(file.itemId),
-            detected_at: new Date().toISOString(),
+          sendProgress({
+            currentFile: file.itemName,
+            completedFiles: downloadedFiles + failedFiles,
+            totalFiles: scannedFiles,
+            phase: 'downloading',
           })
 
-          const dlResult = await engine.downloadOnly(fileId)
-          const savedFile = state.getFile(fileId)
-          results.push({
-            fileId,
-            fileName: file.itemName,
-            success: dlResult.success,
-            error: dlResult.error,
-            downloadPath: savedFile?.download_path ?? undefined,
-            fileSize: file.itemSize,
-          })
+          if (folder.isDbFolder && folder.dbFolderId) {
+            // DB folder: use engine.downloadOnly with state tracking
+            const existing = state.getFileByHistoryNo(file.itemId)
+            if (existing && existing.status === 'completed' && !request.forceRescan) {
+              continue
+            }
 
-          if (dlResult.success) {
-            downloadedFiles++
+            const fileId = state.saveFile({
+              folder_id: folder.dbFolderId,
+              file_name: file.itemName,
+              file_path: `/${folder.folderName}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
+              file_size: file.itemSize,
+              file_extension: file.itemExtension,
+              lguplus_file_id: String(file.itemId),
+              detected_at: new Date().toISOString(),
+            })
+
+            const dlResult = await engine.downloadOnly(fileId)
+            const savedFile = state.getFile(fileId)
+            results.push({
+              fileId,
+              fileName: file.itemName,
+              success: dlResult.success,
+              error: dlResult.error,
+              downloadPath: savedFile?.download_path ?? undefined,
+              fileSize: file.itemSize,
+            })
+
+            if (dlResult.success) downloadedFiles++
+            else failedFiles++
           } else {
-            failedFiles++
+            // Non-DB folder: direct download via lguplus client
+            const destDir = join(tempPath, folder.folderName, file.relativePath ?? '')
+            await mkdir(destDir, { recursive: true })
+            const destPath = join(destDir, file.itemName)
+
+            try {
+              const dlResult = await lguplus.downloadFile(file.itemId, destPath)
+              results.push({
+                fileId: `lguplus:${file.itemId}`,
+                fileName: file.itemName,
+                success: dlResult.success,
+                error: dlResult.success ? undefined : 'Download failed',
+                downloadPath: destPath,
+                fileSize: file.itemSize,
+              })
+              if (dlResult.success) downloadedFiles++
+              else failedFiles++
+            } catch (dlError) {
+              results.push({
+                fileId: `lguplus:${file.itemId}`,
+                fileName: file.itemName,
+                success: false,
+                error: (dlError as Error).message,
+                fileSize: file.itemSize,
+              })
+              failedFiles++
+            }
           }
         }
       }
+
+      sendProgress({
+        currentFile: '',
+        completedFiles: downloadedFiles + failedFiles,
+        totalFiles: scannedFiles,
+        phase: 'downloading',
+      })
 
       return ok({
         scannedFiles,
@@ -747,7 +932,13 @@ export function registerIpcHandlers(services: CoreServices): void {
         : folders
 
       for (const folder of targetFolders) {
-        const files = await lguplus.getAllFilesDeep(Number(folder.lguplus_folder_id))
+        let files: LGUplusFileItem[]
+        try {
+          files = await lguplus.getAllFilesDeep(Number(folder.lguplus_folder_id))
+        } catch {
+          failedFiles++
+          continue
+        }
         scannedFiles += files.length
 
         for (const file of files) {
