@@ -224,7 +224,16 @@ export class SyncEngine implements ISyncEngine {
 
       const downloadResult = await this.deps.retry.execute(
         () =>
-          this.deps.lguplus.downloadFile(lguplusFileId, destPath),
+          this.deps.lguplus.downloadFile(lguplusFileId, destPath, (downloadedBytes, totalBytes) => {
+            this.deps.eventBus.emit('sync:progress', {
+              fileId,
+              fileName: file.file_name,
+              progress: totalBytes > 0 ? (downloadedBytes / totalBytes) * 100 : 0,
+              speedBps: 0,
+              phase: 'downloading',
+              fileSize: totalBytes,
+            })
+          }),
         { maxRetries: 3, baseDelayMs: 1000, circuitName: 'lguplus-download' },
       )
 
