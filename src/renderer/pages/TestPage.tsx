@@ -16,6 +16,9 @@ import {
   ChevronRight,
   ChevronDown,
   FolderOpen,
+  Radio,
+  StopCircle,
+  Bell,
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { useSort } from '../hooks/useSort'
@@ -27,9 +30,10 @@ import type {
   TestUploadResult,
   TestFullSyncResult,
   TestProgressEvent,
+  RealtimeTestEvent,
 } from '../../shared/ipc-types'
 
-type TestTab = 'download' | 'upload' | 'full-sync'
+type TestTab = 'download' | 'upload' | 'full-sync' | 'realtime'
 type TestState = 'idle' | 'scanning' | 'selecting' | 'testing' | 'complete'
 
 interface FileResult {
@@ -59,7 +63,7 @@ const INITIAL_TAB_STATE: TabState = {
   progress: null,
 }
 
-const ALL_TABS: TestTab[] = ['download', 'upload', 'full-sync']
+const ALL_TABS: TestTab[] = ['download', 'upload', 'full-sync', 'realtime']
 
 type FolderSortField = 'folderName' | 'fileCount' | 'syncedCount' | 'remaining' | 'totalSize'
 
@@ -100,6 +104,7 @@ const TAB_CONFIG: Record<TestTab, { label: string; icon: React.ComponentType<{ c
   download: { label: '다운로드', icon: Download, description: 'LGU+ 외부웹하드에서 로컬로 파일을 다운로드합니다.' },
   upload: { label: '업로드', icon: Upload, description: '다운로드 완료된 파일을 자체웹하드로 업로드합니다.' },
   'full-sync': { label: '전체 동기화', icon: RefreshCw, description: '다운로드 + 업로드를 순차적으로 실행합니다.' },
+  realtime: { label: '실시간 감지', icon: Radio, description: '새 파일 감지 시 자동으로 다운로드/업로드를 실행합니다.' },
 }
 
 // Collect all IDs from a folder tree (including descendants)
@@ -248,10 +253,25 @@ export function TestPage() {
     handleSortChange: handleResultSortChange,
   } = useSort(results, 'fileName' as ResultSortField, 'asc', resultComparators)
 
+  // Realtime detection state
+  const [realtimeRunning, setRealtimeRunning] = useState(false)
+  const [realtimeEvents, setRealtimeEvents] = useState<RealtimeTestEvent[]>([])
+  const [realtimeOptions, setRealtimeOptions] = useState({
+    enableDownload: true,
+    enableUpload: true,
+    enableNotification: true,
+  })
+
   // Listen for test progress events — route to the correct tab
   useIpcEvent('test:progress', useCallback((data: TestProgressEvent) => {
     const targetTab = data.testType === 'full-sync' ? 'full-sync' : data.testType as TestTab
     setTabStates((prev) => ({ ...prev, [targetTab]: { ...prev[targetTab], progress: data } }))
+  }, []))
+
+  // Listen for realtime detection events
+  useIpcEvent('test:realtime-event', useCallback((data: RealtimeTestEvent) => {
+    setRealtimeEvents((prev) => [data, ...prev].slice(0, 200))
+    if (data.type === 'stopped') setRealtimeRunning(false)
   }, []))
 
   // Scan folders (with cache support)
@@ -368,6 +388,22 @@ export function TestPage() {
     updateTabState(tab, { ...INITIAL_TAB_STATE })
   }, [tab, updateTabState])
 
+  const handleRealtimeStart = useCallback(async () => {
+    setRealtimeEvents([])
+    const res = await window.electronAPI.invoke('test:realtime-start', {
+      ...realtimeOptions,
+      pollingIntervalMs: 30000,
+    })
+    if (res.success) {
+      setRealtimeRunning(true)
+    }
+  }, [realtimeOptions])
+
+  const handleRealtimeStop = useCallback(async () => {
+    await window.electronAPI.invoke('test:realtime-stop')
+    setRealtimeRunning(false)
+  }, [])
+
   const toggleExpand = useCallback((id: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev)
@@ -443,7 +479,7 @@ export function TestPage() {
       )}
 
       {/* Idle state */}
-      {state === 'idle' && (
+      {tab !== 'realtime' && state === 'idle' && (
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
           <FlaskConical className="h-16 w-16 text-muted-foreground/30" />
           <p className="text-muted-foreground text-sm">{TAB_CONFIG[tab].description}</p>
@@ -459,7 +495,7 @@ export function TestPage() {
       )}
 
       {/* Scanning state */}
-      {state === 'scanning' && (
+      {tab !== 'realtime' && state === 'scanning' && (
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
           <Loader className="h-10 w-10 animate-spin text-info" />
           <p className="text-muted-foreground text-sm">외부 웹하드 폴더를 스캔하는 중...</p>
@@ -467,7 +503,7 @@ export function TestPage() {
       )}
 
       {/* Selecting state */}
-      {state === 'selecting' && (
+      {tab !== 'realtime' && state === 'selecting' && (
         <>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -556,7 +592,7 @@ export function TestPage() {
       )}
 
       {/* Testing state */}
-      {state === 'testing' && (
+      {tab !== 'realtime' && state === 'testing' && (
         <div className="flex-1 flex flex-col items-center justify-center gap-6">
           <Loader className="h-12 w-12 animate-spin text-info" />
           <div className="text-center space-y-2">
@@ -582,7 +618,7 @@ export function TestPage() {
       )}
 
       {/* Complete state */}
-      {state === 'complete' && summary && (
+      {tab !== 'realtime' && state === 'complete' && summary && (
         <div className="flex flex-col gap-4 flex-1 min-h-0">
           {/* Summary cards */}
           <div className="flex items-center gap-4">
@@ -722,8 +758,137 @@ export function TestPage() {
           </div>
         </div>
       )}
+
+      {/* Realtime tab */}
+      {tab === 'realtime' && (
+        <div className="flex flex-col gap-4 flex-1 min-h-0">
+          {/* Options */}
+          <div className="flex items-center gap-6 p-4 rounded-lg border border-border bg-card">
+            <span className="text-sm font-medium">감지 시 동작:</span>
+            {([
+              { key: 'enableDownload' as const, label: '다운로드', icon: Download },
+              { key: 'enableUpload' as const, label: '업로드', icon: Upload },
+              { key: 'enableNotification' as const, label: '알림', icon: Bell },
+            ]).map(({ key, label, icon: Icon }) => (
+              <label key={key} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={realtimeOptions[key]}
+                  onChange={(e) =>
+                    setRealtimeOptions((prev) => ({ ...prev, [key]: e.target.checked }))
+                  }
+                  disabled={realtimeRunning}
+                  className="rounded border-border"
+                />
+                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-sm">{label}</span>
+              </label>
+            ))}
+          </div>
+
+          {/* Start/Stop button */}
+          <div className="flex items-center gap-3">
+            {realtimeRunning ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md bg-error text-error-foreground hover:bg-error/90 transition-colors"
+                onClick={handleRealtimeStop}
+              >
+                <StopCircle className="h-4 w-4" />
+                감지 중지
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                onClick={handleRealtimeStart}
+              >
+                <PlayCircle className="h-4 w-4" />
+                감지 시작
+              </button>
+            )}
+            {realtimeRunning && (
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success" />
+                </span>
+                <span className="text-sm text-success">감지 중...</span>
+              </div>
+            )}
+            {realtimeEvents.length > 0 && (
+              <button
+                type="button"
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setRealtimeEvents([])}
+              >
+                로그 지우기
+              </button>
+            )}
+          </div>
+
+          {/* Event log */}
+          <div className="flex-1 min-h-0 rounded-lg border border-border bg-card overflow-hidden flex flex-col">
+            <div className="flex items-center px-4 py-2 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
+              <span className="w-20">시간</span>
+              <span className="w-20">상태</span>
+              <span className="flex-1">메시지</span>
+            </div>
+            <div className="flex-1 overflow-y-auto font-mono text-xs">
+              {realtimeEvents.length === 0 ? (
+                <div className="flex items-center justify-center h-20 text-sm text-muted-foreground">
+                  {realtimeRunning ? '새 파일 감지 대기 중...' : '감지를 시작하면 로그가 여기에 표시됩니다'}
+                </div>
+              ) : (
+                realtimeEvents.map((evt, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center px-4 py-1.5 border-b border-border/30 hover:bg-accent/30"
+                  >
+                    <span className="w-20 shrink-0 text-muted-foreground">
+                      {new Date(evt.timestamp).toLocaleTimeString('ko-KR')}
+                    </span>
+                    <span className={cn('w-20 shrink-0', getEventColor(evt.type))}>
+                      {getEventLabel(evt.type)}
+                    </span>
+                    <span className="flex-1 truncate">{evt.message}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
+}
+
+function getEventColor(type: RealtimeTestEvent['type']): string {
+  switch (type) {
+    case 'started': return 'text-info'
+    case 'detecting': return 'text-muted-foreground'
+    case 'detected': return 'text-warning'
+    case 'downloading': case 'uploading': return 'text-info'
+    case 'downloaded': case 'uploaded': return 'text-success'
+    case 'error': return 'text-error'
+    case 'stopped': return 'text-muted-foreground'
+    default: return 'text-foreground'
+  }
+}
+
+function getEventLabel(type: RealtimeTestEvent['type']): string {
+  switch (type) {
+    case 'started': return '시작'
+    case 'detecting': return '감지중'
+    case 'detected': return '감지됨'
+    case 'downloading': return '다운로드'
+    case 'downloaded': return '완료'
+    case 'uploading': return '업로드'
+    case 'uploaded': return '완료'
+    case 'error': return '오류'
+    case 'stopped': return '중지'
+    default: return type
+  }
 }
 
 function formatDuration(ms: number): string {
