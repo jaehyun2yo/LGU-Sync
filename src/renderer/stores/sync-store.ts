@@ -149,14 +149,18 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
 
   handleProgress: (event) => {
     const transfers = [...get().activeTransfers]
-    if (event.currentFile) {
-      const idx = transfers.findIndex((t) => t.fileName === event.currentFile)
+    const fileId = event.fileId ?? event.currentFile ?? ''
+    const fileName = event.currentFile ?? ''
+    if (fileName) {
+      const idx = transfers.findIndex((t) => t.fileId === fileId)
+      const progress = event.totalBytes > 0
+        ? (event.completedBytes / event.totalBytes) * 100
+        : (event.totalFiles > 0 ? (event.completedFiles / event.totalFiles) * 100 : 0)
       const transfer: ActiveTransfer = {
-        fileId: event.currentFile,
-        fileName: event.currentFile,
+        fileId,
+        fileName,
         phase: event.phase === 'downloading' ? 'downloading' : 'uploading',
-        progress:
-          event.totalFiles > 0 ? (event.completedFiles / event.totalFiles) * 100 : event.totalFiles,
+        progress,
         speedBps: event.speedBps,
       }
       if (idx >= 0) {

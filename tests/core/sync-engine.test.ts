@@ -549,4 +549,96 @@ describe('SyncEngine', () => {
       expect(saveFileCalls[1][0].file_path).toBe('/테스트업체/2026년/Q1/deep.dxf')
     })
   })
+
+  // ── Folder Structure Preservation ──
+
+  describe('폴더 구조 보존', () => {
+    function setupFileWithPath(filePath: string) {
+      const fileId = 'file-preserve-test'
+      const fileData = {
+        id: fileId,
+        folder_id: 'f1',
+        file_name: filePath.split('/').pop()!,
+        file_path: filePath,
+        file_size: 1024,
+        status: 'detected',
+        lguplus_file_id: '5001',
+        retry_count: 0,
+      }
+
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileData }))
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation((_id, status, extra) => {
+        fileData.status = status
+        if (extra && typeof extra === 'object') {
+          Object.assign(fileData, extra)
+        }
+      })
+
+      ;(config.get as ReturnType<typeof vi.fn>).mockImplementation((section: string) => {
+        if (section === 'system') return { tempDownloadPath: '/tmp/sync' }
+        if (section === 'sync') return { pollingIntervalSec: 5, maxConcurrentDownloads: 5, maxConcurrentUploads: 3, snapshotIntervalMin: 10 }
+        return {}
+      })
+
+      return { fileId, fileData }
+    }
+
+    it('downloadOnly: 서브폴더 경로를 포함한 임시 경로로 다운로드한다', async () => {
+      const { fileId } = setupFileWithPath('/회사A/프로젝트/세부/test.dxf')
+
+      ;(lguplus.downloadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, size: 1024, filename: 'test.dxf',
+      })
+
+      await engine.downloadOnly(fileId)
+
+      expect(lguplus.downloadFile).toHaveBeenCalledWith(
+        5001,
+        '/tmp/sync/회사A/프로젝트/세부/test.dxf',
+      )
+    })
+
+    it('downloadOnly: 서브폴더 없는 파일은 기존대로 동작한다', async () => {
+      const { fileId } = setupFileWithPath('/회사A/test.dxf')
+
+      ;(lguplus.downloadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, size: 1024, filename: 'test.dxf',
+      })
+
+      await engine.downloadOnly(fileId)
+
+      expect(lguplus.downloadFile).toHaveBeenCalledWith(
+        5001,
+        '/tmp/sync/회사A/test.dxf',
+      )
+    })
+
+    it('uploadOnly: ensureFolderPath에 서브폴더 세그먼트가 전달된다', async () => {
+      const { fileId, fileData } = setupFileWithPath('/회사A/프로젝트/세부/test.dxf')
+      fileData.status = 'downloaded'
+      ;(fileData as any).download_path = '/tmp/sync/회사A/프로젝트/세부/test.dxf'
+
+      ;(state.getFolder as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1',
+        lguplus_folder_id: '1001',
+        lguplus_folder_name: '회사A',
+        self_webhard_path: null,
+        enabled: true,
+      })
+
+      ;(uploader.ensureFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, data: 'webhard-folder-id',
+      })
+
+      ;(uploader.uploadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, data: { id: 'up1', name: 'test.dxf', size: 1024, folderId: 'f1', uploadedAt: '' },
+      })
+
+      await engine.uploadOnly(fileId)
+
+      expect(uploader.ensureFolderPath).toHaveBeenCalledWith(
+        ['회사A', '프로젝트', '세부'],
+      )
+    })
+  })
 })

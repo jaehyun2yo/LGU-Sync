@@ -48,32 +48,25 @@ export class FolderDiscovery {
       return result
     }
 
-    // Step 2: Find "올리기전용" folder under HOME
+    // Step 2: Get ALL sub-folders under HOME (게스트폴더)
     const homeFolders = await this.lguplus.getSubFolders(rootId)
-    const uploadRoot = homeFolders.find((f) => f.folderName.includes('올리기전용'))
-    if (!uploadRoot) {
-      this.logger.warn('올리기전용 folder not found under guest root, skipping discovery')
-      return result
-    }
 
-    this.logger.info('Found 올리기전용 folder', {
-      folderId: uploadRoot.folderId,
-      folderName: uploadRoot.folderName,
+    this.logger.info('Found folders under guest root', {
+      count: homeFolders.length,
     })
 
-    // Step 3: Get company sub-folders under 올리기전용
-    let subFolders: LGUplusFolderItem[]
-    try {
-      subFolders = await this.lguplus.getSubFolders(uploadRoot.folderId)
-    } catch (error) {
-      this.logger.error('Failed to get sub-folders of 올리기전용', error as Error)
-      return result
-    }
+    // Deduplicate by folderId (API may return duplicates)
+    const seen = new Set<number>()
+    const uniqueFolders = homeFolders.filter((f) => {
+      if (seen.has(f.folderId)) return false
+      seen.add(f.folderId)
+      return true
+    })
 
-    result.total = subFolders.length
+    result.total = uniqueFolders.length
 
     // Step 3: Process each folder
-    for (const folder of subFolders) {
+    for (const folder of uniqueFolders) {
       try {
         const lguplusFolderId = String(folder.folderId)
         const existing = this.state.getFolderByLguplusId(lguplusFolderId)
@@ -101,7 +94,6 @@ export class FolderDiscovery {
         let selfWebhardPath: string | null = null
         try {
           const ensureResult = await this.uploader.ensureFolderPath([
-            '올리기전용',
             folder.folderName,
           ])
           if (ensureResult.success && ensureResult.data) {
@@ -115,15 +107,32 @@ export class FolderDiscovery {
         }
 
         // Save new folder to DB
-        const id = this.state.saveFolder({
-          lguplus_folder_id: lguplusFolderId,
-          lguplus_folder_name: folder.folderName,
-          lguplus_folder_path: `/올리기전용/${folder.folderName}`,
-          self_webhard_path: selfWebhardPath,
-          company_name: folder.folderName,
-          enabled: true,
-          auto_detected: true,
-        })
+        let id: string
+        try {
+          id = this.state.saveFolder({
+            lguplus_folder_id: lguplusFolderId,
+            lguplus_folder_name: folder.folderName,
+            lguplus_folder_path: `/${folder.folderName}`,
+            self_webhard_path: selfWebhardPath,
+            company_name: folder.folderName,
+            enabled: true,
+            auto_detected: true,
+          })
+        } catch (saveError) {
+          // Handle concurrent discovery race condition (UNIQUE constraint)
+          const raceExisting = this.state.getFolderByLguplusId(lguplusFolderId)
+          if (raceExisting) {
+            result.existingFolders++
+            result.folders.push({
+              id: raceExisting.id,
+              lguplusFolderId,
+              folderName: folder.folderName,
+              isNew: false,
+            })
+            continue
+          }
+          throw saveError
+        }
 
         result.newFolders++
         result.folders.push({

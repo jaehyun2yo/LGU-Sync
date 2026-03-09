@@ -438,6 +438,73 @@ export class LGUplusClient implements ILGUplusClient {
     return allFiles
   }
 
+  async getAllFilesDeep(
+    folderId: number,
+    options?: { maxDepth?: number; concurrency?: number },
+  ): Promise<LGUplusFileItem[]> {
+    const maxDepth = options?.maxDepth ?? 10
+    const concurrency = options?.concurrency ?? 3
+    const allFiles: LGUplusFileItem[] = []
+    const visitedFolderIds = new Set<number>()
+
+    let queue: Array<{ folderId: number; depth: number; relativePath: string }> = [
+      { folderId, depth: 0, relativePath: '' },
+    ]
+
+    while (queue.length > 0) {
+      const currentLevel = queue.splice(0)
+      const nextLevel: typeof queue = []
+
+      // Process current level with concurrency limit
+      for (let i = 0; i < currentLevel.length; i += concurrency) {
+        const batch = currentLevel.slice(i, i + concurrency)
+        const results = await Promise.all(
+          batch.map(async (entry) => {
+            if (visitedFolderIds.has(entry.folderId)) return
+            visitedFolderIds.add(entry.folderId)
+
+            // 1. Get files in this folder (only non-folder items)
+            const files = await this.getAllFiles(entry.folderId)
+            for (const file of files) {
+              if (!file.isFolder) {
+                allFiles.push({
+                  ...file,
+                  relativePath: entry.relativePath || undefined,
+                })
+              }
+            }
+
+            // 2. Get sub-folders via getSubFolders (uses FOLDER_ID)
+            if (entry.depth < maxDepth) {
+              const subFolders = await this.getSubFolders(entry.folderId)
+              for (const sub of subFolders) {
+                if (!visitedFolderIds.has(sub.folderId)) {
+                  const subPath = entry.relativePath
+                    ? `${entry.relativePath}/${sub.folderName}`
+                    : sub.folderName
+                  nextLevel.push({
+                    folderId: sub.folderId,
+                    depth: entry.depth + 1,
+                    relativePath: subPath,
+                  })
+                }
+              }
+            }
+          }),
+        )
+      }
+
+      queue = nextLevel
+    }
+
+    this.logger.info(`Deep scan complete: ${allFiles.length} files found`, {
+      folderId,
+      visitedFolders: visitedFolderIds.size,
+    })
+
+    return allFiles
+  }
+
   // ══════════════════════════════════════════════════
   // Download
   // ══════════════════════════════════════════════════

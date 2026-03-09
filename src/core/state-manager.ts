@@ -386,12 +386,14 @@ export class StateManager implements IStateManager {
       params.push(query.category)
     }
     if (query.from) {
+      const fromVal = query.from.length === 10 ? query.from + ' 00:00:00' : query.from
       sql += ' AND created_at >= ?'
-      params.push(query.from)
+      params.push(fromVal)
     }
     if (query.to) {
+      const toVal = query.to.length === 10 ? query.to + ' 23:59:59' : query.to
       sql += ' AND created_at <= ?'
-      params.push(query.to)
+      params.push(toVal)
     }
 
     sql += ' ORDER BY id DESC'
@@ -406,6 +408,37 @@ export class StateManager implements IStateManager {
     }
 
     return this.db.prepare(sql).all(...params) as LogRow[]
+  }
+
+  getLogCount(query: Omit<LogQuery, 'limit' | 'offset'>): number {
+    let sql = 'SELECT COUNT(*) as cnt FROM app_logs WHERE 1=1'
+    const params: unknown[] = []
+
+    if (query.level && query.level.length > 0) {
+      sql += ` AND level IN (${query.level.map(() => '?').join(', ')})`
+      params.push(...query.level)
+    }
+    if (query.search) {
+      sql += ' AND message LIKE ?'
+      params.push(`%${query.search}%`)
+    }
+    if (query.category) {
+      sql += ' AND category = ?'
+      params.push(query.category)
+    }
+    if (query.from) {
+      const fromVal = query.from.length === 10 ? query.from + ' 00:00:00' : query.from
+      sql += ' AND created_at >= ?'
+      params.push(fromVal)
+    }
+    if (query.to) {
+      const toVal = query.to.length === 10 ? query.to + ' 23:59:59' : query.to
+      sql += ' AND created_at <= ?'
+      params.push(toVal)
+    }
+
+    const row = this.db.prepare(sql).get(...params) as { cnt: number }
+    return row.cnt
   }
 
   addLog(entry: LogInsert): void {

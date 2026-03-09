@@ -194,8 +194,14 @@ export class SyncEngine implements ISyncEngine {
     }
 
     try {
-      // Check if file already exists locally (preserve folder structure from file_path)
-      const destPath = `${this.getTempPath()}${file.file_path}`
+      // Build destination path preserving folder structure from file_path
+      const segments = this.getPathSegments(file.file_path)
+      const subPath = segments.join('/')
+      const destPath = subPath
+        ? `${this.getTempPath()}/${subPath}/${file.file_name}`
+        : `${this.getTempPath()}/${file.file_name}`
+
+      // Check if file already exists locally
       const checkPath = file.download_path ?? destPath
 
       if (await this.isLocalFileValid(checkPath, file.file_size)) {
@@ -282,16 +288,28 @@ export class SyncEngine implements ISyncEngine {
         fileSize: file.file_size,
       })
 
-      let uploadFolderId = this.deps.state.getFolder(file.folder_id)?.self_webhard_path
-      if (!uploadFolderId) {
-        const folder = this.deps.state.getFolder(file.folder_id)
-        if (folder) {
-          const ensureResult = await this.deps.uploader.ensureFolderPath([
-            folder.lguplus_folder_name,
-          ])
-          if (ensureResult.success && ensureResult.data) {
-            uploadFolderId = ensureResult.data
-            this.deps.state.updateFolder(folder.id, { self_webhard_path: uploadFolderId })
+      // Build upload folder path from file_path segments (preserves sub-folder structure)
+      const pathSegments = this.getPathSegments(file.file_path)
+      let uploadFolderId: string | undefined | null
+
+      if (pathSegments.length > 0) {
+        const ensureResult = await this.deps.uploader.ensureFolderPath(pathSegments)
+        if (ensureResult.success && ensureResult.data) {
+          uploadFolderId = ensureResult.data
+        }
+      } else {
+        // Fallback: use cached folder path or create from folder name
+        uploadFolderId = this.deps.state.getFolder(file.folder_id)?.self_webhard_path
+        if (!uploadFolderId) {
+          const folder = this.deps.state.getFolder(file.folder_id)
+          if (folder) {
+            const ensureResult = await this.deps.uploader.ensureFolderPath([
+              folder.lguplus_folder_name,
+            ])
+            if (ensureResult.success && ensureResult.data) {
+              uploadFolderId = ensureResult.data
+              this.deps.state.updateFolder(folder.id, { self_webhard_path: uploadFolderId })
+            }
           }
         }
       }
@@ -414,6 +432,11 @@ export class SyncEngine implements ISyncEngine {
     } catch {
       return false
     }
+  }
+
+  private getPathSegments(filePath: string): string[] {
+    const parts = filePath.split('/').filter(Boolean)
+    return parts.slice(0, -1) // exclude filename
   }
 
   private getTempPath(): string {

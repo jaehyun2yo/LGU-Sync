@@ -53,6 +53,7 @@ export interface IStateManager {
 
   // Logs (GUI)
   getLogs(query: LogQuery): LogRow[]
+  getLogCount(query: Omit<LogQuery, 'limit' | 'offset'>): number
   addLog(entry: LogInsert): void
 
   // Lifecycle

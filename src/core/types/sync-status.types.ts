@@ -4,6 +4,7 @@
 export type SyncFileStatus =
   | 'detected'
   | 'downloading'
+  | 'downloaded'
   | 'dl_failed'
   | 'uploading'
   | 'ul_failed'
