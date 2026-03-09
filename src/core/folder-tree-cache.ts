@@ -1,4 +1,5 @@
 import type { LGUplusFolderItem } from './types/lguplus-client.types'
+import type { MigrationFolderInfo } from '../shared/ipc-types'
 
 interface CacheEntry<T> {
   data: T
@@ -8,10 +9,13 @@ interface CacheEntry<T> {
 export class FolderTreeCache {
   private subFoldersCache = new Map<number, CacheEntry<LGUplusFolderItem[]>>()
   private fileCountCache = new Map<number, CacheEntry<number>>()
+  private scanResultCache: CacheEntry<MigrationFolderInfo[]> | null = null
   private ttlMs: number
+  private scanResultTtlMs: number
 
-  constructor(options?: { ttlMs?: number }) {
+  constructor(options?: { ttlMs?: number; scanResultTtlMs?: number }) {
     this.ttlMs = options?.ttlMs ?? 5 * 60 * 1000 // 기본 5분
+    this.scanResultTtlMs = options?.scanResultTtlMs ?? 30 * 60 * 1000 // 30분
   }
 
   getSubFolders(folderId: number): LGUplusFolderItem[] | null {
@@ -51,8 +55,31 @@ export class FolderTreeCache {
     this.fileCountCache.delete(folderId)
   }
 
+  getScanResult(): { data: MigrationFolderInfo[]; cachedAt: number } | null {
+    if (!this.scanResultCache || Date.now() > this.scanResultCache.expiresAt) {
+      this.scanResultCache = null
+      return null
+    }
+    return {
+      data: this.scanResultCache.data,
+      cachedAt: this.scanResultCache.expiresAt - this.scanResultTtlMs,
+    }
+  }
+
+  setScanResult(folders: MigrationFolderInfo[]): void {
+    this.scanResultCache = {
+      data: folders,
+      expiresAt: Date.now() + this.scanResultTtlMs,
+    }
+  }
+
+  invalidateScanResult(): void {
+    this.scanResultCache = null
+  }
+
   clear(): void {
     this.subFoldersCache.clear()
     this.fileCountCache.clear()
+    this.scanResultCache = null
   }
 }
