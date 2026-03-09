@@ -239,15 +239,11 @@ export class YjlaserUploader implements IWebhardUploader {
 
       // 4. Record metadata via batch-record
       const recordRes = await this.apiPost<{
-        data: Array<{
-          id: string
-          objectKey: string
-          publicUrl: string
-          folderId: string
-          fileName: string
-          size: number
-          createdAt: string
-        }>
+        success: boolean
+        data: {
+          inserted: number
+          files: Array<{ id: number; name: string; folder_id: string }>
+        }
       }>('/batch-record', {
         files: [
           {
@@ -260,13 +256,18 @@ export class YjlaserUploader implements IWebhardUploader {
         ],
       })
 
-      const recorded = recordRes.data[0]
+      const recorded = recordRes.data?.files?.[0]
+      if (!recorded) {
+        throw new Error(
+          `batch-record returned no file data (inserted: ${recordRes.data?.inserted ?? 'unknown'})`,
+        )
+      }
       const uploadedFile: UploadedFileInfo = {
-        id: recorded.id,
-        name: recorded.fileName,
-        size: recorded.size,
-        folderId: recorded.folderId,
-        uploadedAt: recorded.createdAt,
+        id: String(recorded.id),
+        name: recorded.name,
+        size,
+        folderId: recorded.folder_id,
+        uploadedAt: new Date().toISOString(),
       }
 
       this.emitEvent('upload-completed', uploadedFile)

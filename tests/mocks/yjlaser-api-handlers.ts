@@ -190,15 +190,15 @@ export const yjlaserApiHandlers = [
     }
 
     return HttpResponse.json({
-      data: recorded.map((f) => ({
-        id: f.id,
-        objectKey: f.object_key,
-        publicUrl: f.public_url,
-        folderId: f.folder_id,
-        fileName: f.file_name,
-        size: f.size,
-        createdAt: f.created_at,
-      })),
+      success: true,
+      data: {
+        inserted: recorded.length,
+        files: recorded.map((f) => ({
+          id: fileCounter,
+          name: f.file_name,
+          folder_id: f.folder_id,
+        })),
+      },
     })
   }),
 ]

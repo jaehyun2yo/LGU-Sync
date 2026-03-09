@@ -317,17 +317,17 @@ describe('YjlaserUploader', () => {
             }
             batchRecordBody = await request.json()
             return HttpResponse.json({
-              data: [
-                {
-                  id: 'file-captured',
-                  objectKey: batchRecordBody.files[0].objectKey,
-                  publicUrl: batchRecordBody.files[0].publicUrl,
-                  folderId: batchRecordBody.files[0].folderId,
-                  fileName: batchRecordBody.files[0].fileName,
-                  size: batchRecordBody.files[0].size,
-                  createdAt: new Date().toISOString(),
-                },
-              ],
+              success: true,
+              data: {
+                inserted: 1,
+                files: [
+                  {
+                    id: 99,
+                    name: batchRecordBody.files[0].fileName,
+                    folder_id: batchRecordBody.files[0].folderId,
+                  },
+                ],
+              },
             })
           }),
         )
