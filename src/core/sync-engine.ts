@@ -115,63 +115,23 @@ export class SyncEngine implements ISyncEngine {
         ? folders.filter((f) => options.folderIds!.includes(f.id))
         : folders
 
-      for (const folder of targetFolders) {
-        try {
-          // Get all files from LGU+ folder (deep scan)
-          const files = await this.deps.lguplus.getAllFilesDeep(
-            Number(folder.lguplus_folder_id),
-          )
-          scannedFiles += files.length
+      // 폴더 스캔을 병렬로 (concurrency=3)
+      const SCAN_CONCURRENCY = 3
+      for (let i = 0; i < targetFolders.length; i += SCAN_CONCURRENCY) {
+        const batch = targetFolders.slice(i, i + SCAN_CONCURRENCY)
+        const results = await Promise.allSettled(
+          batch.map((folder) => this.scanFolder(folder, options)),
+        )
 
-          for (const file of files) {
-            // Check if already synced
-            const existing = this.deps.state.getFileByHistoryNo(file.itemId)
-
-            if (existing && existing.status === 'completed' && !options?.forceRescan) {
-              // Compare updatedAt for freshness check
-              if (existing.lguplus_updated_at === file.updatedAt) {
-                continue // Up-to-date → skip
-              }
-              // updatedAt changed → reset status and re-sync
-              this.deps.state.updateFileStatus(existing.id, 'detected', {
-                lguplus_updated_at: file.updatedAt,
-              })
-              newFiles++
-              const result = await this.syncFile(existing.id)
-              if (result.success) syncedFiles++
-              else failedFiles++
-              continue
-            }
-
-            // In-progress file → skip
-            if (existing) continue
-
-            newFiles++
-
-            // Save file record (preserve relativePath in file_path)
-            const subPath = file.relativePath ? `${file.relativePath}/` : ''
-            const fileId = this.deps.state.saveFile({
-              folder_id: folder.id,
-              file_name: file.itemName,
-              file_path: `/${folder.lguplus_folder_name}/${subPath}${file.itemName}`,
-              file_size: file.itemSize,
-              file_extension: file.itemExtension,
-              lguplus_file_id: String(file.itemId),
-              lguplus_updated_at: file.updatedAt,
-              detected_at: new Date().toISOString(),
-            })
-
-            // Sync the file
-            const result = await this.syncFile(fileId)
-            if (result.success) {
-              syncedFiles++
-            } else {
-              failedFiles++
-            }
+        for (const result of results) {
+          if (result.status === 'fulfilled') {
+            scannedFiles += result.value.scannedFiles
+            newFiles += result.value.newFiles
+            syncedFiles += result.value.syncedFiles
+            failedFiles += result.value.failedFiles
+          } else {
+            failedFiles++
           }
-        } catch (error) {
-          this.logger.error(`Full sync failed for folder ${folder.id}`, error as Error)
-          failedFiles++
         }
       }
     } catch (error) {
@@ -185,6 +145,67 @@ export class SyncEngine implements ISyncEngine {
       failedFiles,
       durationMs: Date.now() - start,
     }
+  }
+
+  private async scanFolder(
+    folder: { id: string; lguplus_folder_id: string; lguplus_folder_name: string },
+    options?: FullSyncOptions,
+  ): Promise<{ scannedFiles: number; newFiles: number; syncedFiles: number; failedFiles: number }> {
+    let scannedFiles = 0
+    let newFiles = 0
+    let syncedFiles = 0
+    let failedFiles = 0
+
+    // Deep scan to include sub-folders with relativePath
+    const files = await this.deps.lguplus.getAllFilesDeep(
+      Number(folder.lguplus_folder_id),
+    )
+    scannedFiles = files.length
+
+    for (const file of files) {
+      // Check if already synced
+      const existing = this.deps.state.getFileByHistoryNo(file.itemId)
+
+      if (existing && existing.status === 'completed' && !options?.forceRescan) {
+        // Compare updatedAt for freshness check
+        if (existing.lguplus_updated_at === file.updatedAt) {
+          continue // Up-to-date → skip
+        }
+        // updatedAt changed → reset status and re-sync
+        this.deps.state.updateFileStatus(existing.id, 'detected', {
+          lguplus_updated_at: file.updatedAt,
+        })
+        newFiles++
+        const result = await this.syncFile(existing.id)
+        if (result.success) syncedFiles++
+        else failedFiles++
+        continue
+      }
+
+      // In-progress file → skip
+      if (existing) continue
+
+      newFiles++
+
+      // Save file record (preserve relativePath in file_path)
+      const subPath = file.relativePath ? `${file.relativePath}/` : ''
+      const fileId = this.deps.state.saveFile({
+        folder_id: folder.id,
+        file_name: file.itemName,
+        file_path: `/${folder.lguplus_folder_name}/${subPath}${file.itemName}`,
+        file_size: file.itemSize,
+        file_extension: file.itemExtension,
+        lguplus_file_id: String(file.itemId),
+        lguplus_updated_at: file.updatedAt,
+        detected_at: new Date().toISOString(),
+      })
+
+      const result = await this.syncFile(fileId)
+      if (result.success) syncedFiles++
+      else failedFiles++
+    }
+
+    return { scannedFiles, newFiles, syncedFiles, failedFiles }
   }
 
   async downloadOnly(fileId: string): Promise<SyncResult> {

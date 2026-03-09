@@ -548,6 +548,43 @@ describe('SyncEngine', () => {
       // Deep file: /테스트업체/2026년/Q1/deep.dxf
       expect(saveFileCalls[1][0].file_path).toBe('/테스트업체/2026년/Q1/deep.dxf')
     })
+
+    it('여러 폴더를 병렬로 스캔한다', async () => {
+      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: 'A', enabled: true },
+        { id: 'f2', lguplus_folder_id: '1002', lguplus_folder_name: 'B', enabled: true },
+        { id: 'f3', lguplus_folder_id: '1003', lguplus_folder_name: 'C', enabled: true },
+      ])
+
+      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        await new Promise(r => setTimeout(r, 50))
+        return []
+      })
+
+      const start = Date.now()
+      await engine.fullSync()
+      const elapsed = Date.now() - start
+
+      // 순차이면 ~150ms (3*50ms), 병렬이면 ~50ms
+      expect(elapsed).toBeLessThan(120)
+    })
+
+    it('한 폴더 실패가 다른 폴더에 영향을 주지 않는다', async () => {
+      ;(state.getFolders as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: 'A', enabled: true },
+        { id: 'f2', lguplus_folder_id: '1002', lguplus_folder_name: 'B', enabled: true },
+      ])
+
+      ;(lguplus.getAllFilesDeep as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValueOnce([
+          { itemId: 1, itemName: 'file.dxf', itemSize: 100, itemExtension: 'dxf', parentFolderId: 1002, updatedAt: '2026-01-01', isFolder: false },
+        ])
+
+      const result = await engine.fullSync()
+      // B 폴더의 파일은 정상 스캔됨
+      expect(result.scannedFiles).toBe(1)
+    })
   })
 
   // ── Folder Structure Preservation ──

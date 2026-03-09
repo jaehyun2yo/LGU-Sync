@@ -19,6 +19,7 @@ import {
 } from './errors'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import type { FolderTreeCache } from './folder-tree-cache'
 
 type SessionEventHandler = (...args: unknown[]) => void
 
@@ -36,16 +37,18 @@ export class LGUplusClient implements ILGUplusClient {
   private baseUrl: string
   private logger: ILogger
   private retry: IRetryManager
+  private folderCache?: FolderTreeCache
   private authenticated = false
   private cookies = ''
   private storedUserId = ''
   private storedPassword = ''
   private eventHandlers = new Map<string, SessionEventHandler[]>()
 
-  constructor(baseUrl: string, logger: ILogger, retry: IRetryManager) {
+  constructor(baseUrl: string, logger: ILogger, retry: IRetryManager, folderCache?: FolderTreeCache) {
     this.baseUrl = baseUrl
     this.logger = logger.child({ module: 'lguplus-client' })
     this.retry = retry
+    this.folderCache = folderCache
   }
 
   // ══════════════════════════════════════════════════
@@ -335,6 +338,12 @@ export class LGUplusClient implements ILGUplusClient {
   }
 
   async getSubFolders(folderId: number): Promise<LGUplusFolderItem[]> {
+    // 캐시 히트 확인
+    if (this.folderCache) {
+      const cached = this.folderCache.getSubFolders(folderId)
+      if (cached) return cached
+    }
+
     const data = await this.callWhApi({
       MESSAGE_TYPE: 'FOLDER',
       PROCESS_TYPE: 'TREE',
@@ -350,12 +359,19 @@ export class LGUplusClient implements ILGUplusClient {
       SUB_CNT?: number
     }>
 
-    return raw.map((f) => ({
+    const folders = raw.map((f) => ({
       folderId: f.FOLDER_ID,
       folderName: f.FOLDER_NAME,
       parentFolderId: f.UPPER_FOLDER_ID ?? f.UPPER_ID ?? 0,
       subFolderCount: f.SUB_CNT,
     }))
+
+    // 캐시 저장
+    if (this.folderCache) {
+      this.folderCache.setSubFolders(folderId, folders)
+    }
+
+    return folders
   }
 
   async findFolderByName(parentId: number, name: string): Promise<number | null> {
@@ -423,17 +439,35 @@ export class LGUplusClient implements ILGUplusClient {
     folderId: number,
     onProgress?: (page: number, fetched: number, total: number) => void,
   ): Promise<LGUplusFileItem[]> {
-    const allFiles: LGUplusFileItem[] = []
-    let page = 1
-    let total = 0
+    // 첫 페이지로 total 파악
+    const firstPage = await this.getFileList(folderId, { page: 1 })
+    const allFiles = [...firstPage.items]
+    const total = firstPage.total
+    const pageSize = firstPage.items.length || 20
 
-    do {
-      const result = await this.getFileList(folderId, { page })
-      allFiles.push(...result.items)
-      total = result.total
-      onProgress?.(page, allFiles.length, total)
-      page++
-    } while (allFiles.length < total)
+    onProgress?.(1, allFiles.length, total)
+
+    if (allFiles.length >= total) return allFiles
+
+    // 남은 페이지 수 계산 → 병렬 fetch
+    const totalPages = Math.ceil(total / pageSize)
+    const remainingPages = Array.from(
+      { length: totalPages - 1 },
+      (_, i) => i + 2,
+    )
+
+    // 병렬 batch (한 번에 5페이지씩)
+    const BATCH_SIZE = 5
+    for (let i = 0; i < remainingPages.length; i += BATCH_SIZE) {
+      const batch = remainingPages.slice(i, i + BATCH_SIZE)
+      const results = await Promise.all(
+        batch.map((page) => this.getFileList(folderId, { page })),
+      )
+      for (const result of results) {
+        allFiles.push(...result.items)
+      }
+      onProgress?.(batch[batch.length - 1], allFiles.length, total)
+    }
 
     return allFiles
   }
@@ -443,59 +477,87 @@ export class LGUplusClient implements ILGUplusClient {
     options?: { maxDepth?: number; concurrency?: number },
   ): Promise<LGUplusFileItem[]> {
     const maxDepth = options?.maxDepth ?? 10
-    const concurrency = options?.concurrency ?? 3
+    const concurrency = options?.concurrency ?? 5
     const allFiles: LGUplusFileItem[] = []
     const visitedFolderIds = new Set<number>()
 
-    let queue: Array<{ folderId: number; depth: number; relativePath: string }> = [
+    // Worker pool: 폴더가 발견되면 즉시 큐에 추가
+    const queue: Array<{ folderId: number; depth: number; relativePath: string }> = [
       { folderId, depth: 0, relativePath: '' },
     ]
 
-    while (queue.length > 0) {
-      const currentLevel = queue.splice(0)
-      const nextLevel: typeof queue = []
+    let activeWorkers = 0
+    let resolveAll: (() => void) | undefined
+    const allDone = new Promise<void>((r) => {
+      resolveAll = r
+    })
 
-      // Process current level with concurrency limit
-      for (let i = 0; i < currentLevel.length; i += concurrency) {
-        const batch = currentLevel.slice(i, i + concurrency)
-        const results = await Promise.all(
-          batch.map(async (entry) => {
-            if (visitedFolderIds.has(entry.folderId)) return
-            visitedFolderIds.add(entry.folderId)
-
-            // 1. Get files in this folder (only non-folder items)
-            const files = await this.getAllFiles(entry.folderId)
-            for (const file of files) {
-              if (!file.isFolder) {
-                allFiles.push({
-                  ...file,
-                  relativePath: entry.relativePath || undefined,
-                })
-              }
-            }
-
-            // 2. Get sub-folders via getSubFolders (uses FOLDER_ID)
-            if (entry.depth < maxDepth) {
-              const subFolders = await this.getSubFolders(entry.folderId)
-              for (const sub of subFolders) {
-                if (!visitedFolderIds.has(sub.folderId)) {
-                  const subPath = entry.relativePath
-                    ? `${entry.relativePath}/${sub.folderName}`
-                    : sub.folderName
-                  nextLevel.push({
-                    folderId: sub.folderId,
-                    depth: entry.depth + 1,
-                    relativePath: subPath,
-                  })
-                }
-              }
-            }
-          }),
-        )
+    const checkDone = (): void => {
+      if (queue.length === 0 && activeWorkers === 0) {
+        resolveAll?.()
       }
-
-      queue = nextLevel
     }
+
+    const processNext = async (): Promise<void> => {
+      while (true) {
+        const entry = queue.shift()
+        if (!entry) {
+          // 큐가 비었지만 다른 워커가 아직 동작 중이면 잠시 대기
+          if (activeWorkers > 0) {
+            await new Promise((r) => setTimeout(r, 5))
+            continue
+          }
+          break
+        }
+
+        if (visitedFolderIds.has(entry.folderId)) {
+          checkDone()
+          continue
+        }
+        visitedFolderIds.add(entry.folderId)
+
+        activeWorkers++
+
+        // 파일 목록 + 서브폴더를 동시에 가져옴
+        const [files, subFolders] = await Promise.all([
+          this.getAllFiles(entry.folderId),
+          entry.depth < maxDepth
+            ? this.getSubFolders(entry.folderId)
+            : Promise.resolve([]),
+        ])
+
+        // 파일 수집
+        for (const file of files) {
+          if (!file.isFolder) {
+            allFiles.push({
+              ...file,
+              relativePath: entry.relativePath || undefined,
+            })
+          }
+        }
+
+        // 서브폴더를 즉시 큐에 추가
+        for (const sub of subFolders) {
+          if (!visitedFolderIds.has(sub.folderId)) {
+            const subPath = entry.relativePath
+              ? `${entry.relativePath}/${sub.folderName}`
+              : sub.folderName
+            queue.push({
+              folderId: sub.folderId,
+              depth: entry.depth + 1,
+              relativePath: subPath,
+            })
+          }
+        }
+
+        activeWorkers--
+        checkDone()
+      }
+    }
+
+    // concurrency 개수만큼 워커 시작
+    const workers = Array.from({ length: concurrency }, () => processNext())
+    await allDone
 
     this.logger.info(`Deep scan complete: ${allFiles.length} files found`, {
       folderId,
