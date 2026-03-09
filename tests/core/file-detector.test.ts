@@ -61,7 +61,7 @@ describe('FileDetector', () => {
           itemSrcExtension: 'dxf',
           itemSrcType: 'file',
           itemFolderFullpath: '/올리기전용/원컴퍼니/',
-          itemOperCode: 'U',
+          itemOperCode: 'UP',
           itemUseDate: '2026-02-23 10:00:00',
         },
       ],
@@ -105,6 +105,7 @@ describe('FileDetector', () => {
     const files = await detector.forceCheck()
     expect(files).toHaveLength(1)
     expect(files[0].fileName).toBe('drawing1.dxf')
+    expect(files[0].operCode).toBe('UP')
   })
 
   it('onFilesDetected()로 핸들러를 등록하고 파일 감지 시 호출된다', async () => {
@@ -115,7 +116,7 @@ describe('FileDetector', () => {
 
     expect(handler).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ fileName: 'drawing1.dxf' }),
+        expect.objectContaining({ fileName: 'drawing1.dxf', operCode: 'UP' }),
       ]),
       'polling',
     )
@@ -174,10 +175,97 @@ describe('FileDetector', () => {
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         files: expect.arrayContaining([
-          expect.objectContaining({ fileName: 'drawing1.dxf' }),
+          expect.objectContaining({ fileName: 'drawing1.dxf', operCode: 'UP' }),
         ]),
         strategy: 'polling',
       }),
     )
+  })
+
+  it('DN(다운로드) operCode는 감지에서 제외한다', async () => {
+    ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      total: 2,
+      pageSize: 20,
+      items: [
+        {
+          historyNo: 201,
+          itemSrcNo: 5001,
+          itemFolderId: 1001,
+          itemSrcName: 'drawing1',
+          itemSrcExtension: 'dxf',
+          itemSrcType: 'file',
+          itemFolderFullpath: '/올리기전용/원컴퍼니/',
+          itemOperCode: 'DN',
+          itemUseDate: '2026-02-23 10:00:00',
+        },
+        {
+          historyNo: 202,
+          itemSrcNo: 5002,
+          itemFolderId: 1001,
+          itemSrcName: 'drawing2',
+          itemSrcExtension: 'dxf',
+          itemSrcType: 'file',
+          itemFolderFullpath: '/올리기전용/원컴퍼니/',
+          itemOperCode: 'UP',
+          itemUseDate: '2026-02-23 10:01:00',
+        },
+      ],
+    })
+
+    const files = await detector.forceCheck()
+
+    // DN은 필터링되고 UP만 반환
+    expect(files).toHaveLength(1)
+    expect(files[0].fileName).toBe('drawing2.dxf')
+    expect(files[0].operCode).toBe('UP')
+
+    // checkpoint는 DN 포함 전체 중 max (202)로 갱신
+    expect(mockState.saveCheckpoint).toHaveBeenCalledWith('last_history_no', '202')
+  })
+
+  it('모든 operCode를 감지한다 (DN 제외)', async () => {
+    ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      total: 4,
+      pageSize: 20,
+      items: [
+        {
+          historyNo: 301, itemSrcNo: 5001, itemFolderId: 1001,
+          itemSrcName: 'file1', itemSrcExtension: 'dxf', itemSrcType: 'file',
+          itemFolderFullpath: '/올리기전용/', itemOperCode: 'D',
+          itemUseDate: '2026-02-23 10:00:00',
+        },
+        {
+          historyNo: 302, itemSrcNo: 5002, itemFolderId: 1001,
+          itemSrcName: 'file2', itemSrcExtension: 'dxf', itemSrcType: 'file',
+          itemFolderFullpath: '/올리기전용/', itemOperCode: 'MV',
+          itemUseDate: '2026-02-23 10:01:00',
+        },
+        {
+          historyNo: 303, itemSrcNo: 5003, itemFolderId: 1001,
+          itemSrcName: 'file3', itemSrcExtension: 'dxf', itemSrcType: 'file',
+          itemFolderFullpath: '/올리기전용/', itemOperCode: 'RN',
+          itemUseDate: '2026-02-23 10:02:00',
+        },
+        {
+          historyNo: 304, itemSrcNo: 5004, itemFolderId: 1001,
+          itemSrcName: '새폴더', itemSrcExtension: '', itemSrcType: 'folder',
+          itemFolderFullpath: '/올리기전용/', itemOperCode: 'FC',
+          itemUseDate: '2026-02-23 10:03:00',
+        },
+      ],
+    })
+
+    const files = await detector.forceCheck()
+
+    expect(files).toHaveLength(4)
+    expect(files.map((f) => f.operCode)).toEqual(['D', 'MV', 'RN', 'FC'])
+    // 폴더 operCode(FC)는 확장자 없이 이름만
+    expect(files[3].fileName).toBe('새폴더')
+  })
+
+  it('operCode를 빈 문자열로 호출하여 전체 이력을 조회한다', async () => {
+    await detector.forceCheck()
+
+    expect(mockClient.getUploadHistory).toHaveBeenCalledWith({ operCode: '' })
   })
 })

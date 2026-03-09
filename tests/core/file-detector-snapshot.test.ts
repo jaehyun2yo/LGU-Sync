@@ -164,8 +164,9 @@ describe('FileDetector - snapshot 전략', () => {
 
     expect(files).toHaveLength(1)
     expect(files[0].fileName).toBe('drawing1.dxf')
+    expect(files[0].operCode).toBe('UP')
     expect(handler).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ fileName: 'drawing1.dxf' })]),
+      expect.arrayContaining([expect.objectContaining({ fileName: 'drawing1.dxf', operCode: 'UP' })]),
       'snapshot',
     )
   })

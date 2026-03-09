@@ -479,6 +479,8 @@ export interface RealtimeTestEvent {
   fileName?: string
   success?: boolean
   error?: string
+  /** 감지된 변동 유형 (detected 이벤트에서 사용) */
+  operCode?: string
 }
 
 // ── IPC Event Map (Main → Renderer, one-way push) ──

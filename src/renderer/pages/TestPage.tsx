@@ -866,6 +866,7 @@ export function TestPage() {
             <div className="flex items-center px-4 py-2 border-b border-border bg-muted/50 text-xs font-medium text-muted-foreground">
               <span className="w-20">시간</span>
               <span className="w-20">상태</span>
+              <span className="w-16">유형</span>
               <span className="flex-1">메시지</span>
             </div>
             <div className="flex-1 overflow-y-auto font-mono text-xs">
@@ -884,6 +885,9 @@ export function TestPage() {
                     </span>
                     <span className={cn('w-20 shrink-0', getEventColor(evt.type))}>
                       {getEventLabel(evt.type)}
+                    </span>
+                    <span className={cn('w-16 shrink-0', evt.operCode ? getOperCodeColor(evt.operCode) : 'text-muted-foreground')}>
+                      {evt.operCode ?? '-'}
                     </span>
                     <span className="flex-1 truncate">{evt.message}</span>
                   </div>
@@ -943,4 +947,15 @@ function formatBytes(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
+}
+
+function getOperCodeColor(code: string): string {
+  switch (code) {
+    case 'UP': case 'CP': return 'text-success'
+    case 'D': case 'FD': return 'text-error'
+    case 'MV': case 'FMV': return 'text-warning'
+    case 'RN': case 'FRN': return 'text-info'
+    case 'FC': return 'text-info'
+    default: return 'text-muted-foreground'
+  }
 }

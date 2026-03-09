@@ -20,6 +20,23 @@ function fail(code: string, message: string): ApiResponse<never> {
   }
 }
 
+/** operCode를 한글 라벨로 변환 */
+function getOperCodeLabel(code: string): string {
+  switch (code) {
+    case 'UP': return '파일 업로드'
+    case 'D': return '파일 삭제'
+    case 'MV': return '파일 이동'
+    case 'RN': return '파일 이름변경'
+    case 'CP': return '파일 복사'
+    case 'FC': return '폴더 생성'
+    case 'FD': return '폴더 삭제'
+    case 'FMV': return '폴더 이동'
+    case 'FRN': return '폴더 이름변경'
+    case 'DN': return '파일 다운로드'
+    default: return `알 수 없음(${code})`
+  }
+}
+
 export async function exportLogs(
   getLogs: (query: LogQuery) => LogRow[],
   request: { format: 'csv' | 'json'; dateFrom?: string; dateTo?: string },
@@ -1187,13 +1204,17 @@ export function registerIpcHandlers(services: CoreServices): void {
           }
 
           for (const file of detected) {
+            const operLabel = getOperCodeLabel(file.operCode)
             sendEvent({
               type: 'detected',
-              message: `파일 감지: ${file.fileName}`,
+              message: `[${file.operCode}] ${operLabel}: ${file.fileName}`,
               timestamp: new Date().toISOString(),
               fileName: file.fileName,
+              operCode: file.operCode,
             })
 
+            // UP/CP만 다운로드/업로드 처리, 나머지는 감지 이벤트만 발행
+            if (file.operCode !== 'UP' && file.operCode !== 'CP') continue
             if (!request.enableDownload && !request.enableUpload) continue
 
             const dbFolder = state.getFolderByLguplusId(file.folderId)

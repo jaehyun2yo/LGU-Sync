@@ -392,36 +392,56 @@ export class SyncEngine implements ISyncEngine {
     return { success: true, fileId }
   }
 
+  /** operCode에 따라 파일 동기화(UP/CP) 또는 이벤트 로깅을 수행 */
   private handleDetectedFiles(files: DetectedFile[], strategy: DetectionStrategy): void {
     if (this._status !== 'syncing') return
 
-    this.logger.info(`Detected ${files.length} files via ${strategy}`)
+    this.logger.info(`Detected ${files.length} events via ${strategy}`)
 
     for (const detected of files) {
-      // Map LGU+ folder ID to internal UUID
-      const folder = this.deps.state.getFolderByLguplusId(detected.folderId)
-      if (!folder) {
-        this.logger.warn(
-          `Skipping file ${detected.fileName}: no registered folder for LGU+ folder ID ${detected.folderId}`,
-        )
+      const { operCode } = detected
+
+      // 파일 업로드/복사 → 기존 다운로드+업로드 동기화
+      if (operCode === 'UP' || operCode === 'CP') {
+        this.handleFileUpload(detected)
         continue
       }
 
-      // Save file to state with internal folder UUID
-      const fileId = this.deps.state.saveFile({
-        folder_id: folder.id,
-        history_no: detected.historyNo,
-        file_name: detected.fileName,
-        file_path: detected.filePath,
-        file_size: detected.fileSize,
-        detected_at: new Date().toISOString(),
-      })
-
-      // Queue for sync
-      this.syncFile(fileId).catch((error) => {
-        this.logger.error(`Failed to sync detected file ${fileId}`, error as Error)
+      // 폴더/파일 변경 이벤트 → 로깅만 (삭제, 이동, 이름변경 등)
+      this.logger.info(`Event [${operCode}] ${detected.fileName}`, {
+        operCode,
+        filePath: detected.filePath,
+        folderId: detected.folderId,
+        historyNo: detected.historyNo,
       })
     }
+  }
+
+  /** UP/CP operCode: 새 파일을 다운로드 → 업로드 동기화 */
+  private handleFileUpload(detected: DetectedFile): void {
+    // Map LGU+ folder ID to internal UUID
+    const folder = this.deps.state.getFolderByLguplusId(detected.folderId)
+    if (!folder) {
+      this.logger.warn(
+        `Skipping file ${detected.fileName}: no registered folder for LGU+ folder ID ${detected.folderId}`,
+      )
+      return
+    }
+
+    // Save file to state with internal folder UUID
+    const fileId = this.deps.state.saveFile({
+      folder_id: folder.id,
+      history_no: detected.historyNo,
+      file_name: detected.fileName,
+      file_path: detected.filePath,
+      file_size: detected.fileSize,
+      detected_at: new Date().toISOString(),
+    })
+
+    // Queue for sync
+    this.syncFile(fileId).catch((error) => {
+      this.logger.error(`Failed to sync detected file ${fileId}`, error as Error)
+    })
   }
 
   private getPathSegments(filePath: string): string[] {

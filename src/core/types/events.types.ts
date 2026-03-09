@@ -6,12 +6,27 @@ import type { SyncAppError } from '../errors'
 export type EngineStatus = 'idle' | 'syncing' | 'paused' | 'error' | 'stopping' | 'stopped'
 export type DetectionStrategy = 'polling' | 'snapshot' | 'integrity'
 
+/** LGU+ 웹하드 operCode — 파일/폴더 변동 유형 */
+export type OperCode =
+  | 'UP'  // 업로드
+  | 'D'   // 삭제
+  | 'MV'  // 이동
+  | 'RN'  // 이름변경
+  | 'CP'  // 복사
+  | 'FC'  // 폴더생성
+  | 'FD'  // 폴더삭제
+  | 'FMV' // 폴더이동
+  | 'FRN' // 폴더이름변경
+  | 'DN'  // 다운로드
+
 export interface DetectedFile {
   fileName: string
   filePath: string
   fileSize: number
   historyNo?: number
   folderId: string
+  /** 변동 유형. snapshot 전략에서는 'UP'으로 추론 */
+  operCode: OperCode
 }
 
 export interface EventMap {

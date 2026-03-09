@@ -18,6 +18,7 @@ export function diffSnapshot(
   const currentFileIds = new Set(currentFiles.map((f) => f.itemId))
 
   // 신규 파일: 현재 폴더에 있지만 DB에 없는 파일 (폴더 제외)
+  // snapshot 전략으로 감지된 파일은 operCode를 'UP'으로 추론
   const newFiles: DetectedFile[] = currentFiles
     .filter((f) => !f.isFolder && !knownFileIds.has(f.itemId))
     .map((f) => ({
@@ -25,6 +26,7 @@ export function diffSnapshot(
       filePath: f.relativePath ? `${f.relativePath}/${f.itemName}` : f.itemName,
       fileSize: f.itemSize,
       folderId,
+      operCode: 'UP' as const,
     }))
 
   // 삭제된 파일: DB에 있지만 현재 폴더에 없는 파일

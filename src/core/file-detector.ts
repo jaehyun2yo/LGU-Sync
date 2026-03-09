@@ -1,9 +1,12 @@
 import type { IFileDetector } from './types/file-detector.types'
 import type { ILGUplusClient, UploadHistoryItem } from './types/lguplus-client.types'
 import type { IStateManager } from './types/state-manager.types'
-import type { IEventBus, DetectedFile, DetectionStrategy } from './types/events.types'
+import type { IEventBus, DetectedFile, DetectionStrategy, OperCode } from './types/events.types'
 import type { ILogger } from './types/logger.types'
 import { diffSnapshot } from './snapshot-diff'
+
+/** DN(다운로드)은 본인 다운로드 기록이므로 감지에서 제외 */
+const EXCLUDED_OPER_CODES = new Set<string>(['DN'])
 
 type DetectionHandler = (files: DetectedFile[], strategy: DetectionStrategy) => void
 
@@ -124,10 +127,13 @@ export class FileDetector implements IFileDetector {
       const lastHistoryNo = this.state.getCheckpoint('last_history_no')
       const lastNo = lastHistoryNo ? parseInt(lastHistoryNo, 10) : 0
 
-      const history = await this.client.getUploadHistory()
+      // operCode='' → 모든 변동 이력 조회 (UP, D, MV, RN, CP, FC, FD, FMV, FRN, DN)
+      const history = await this.client.getUploadHistory({ operCode: '' })
 
-      // Filter new items (historyNo > lastNo)
-      const newItems = history.items.filter((item) => item.historyNo > lastNo)
+      // Filter new items (historyNo > lastNo) and exclude DN (본인 다운로드)
+      const newItems = history.items.filter(
+        (item) => item.historyNo > lastNo && !EXCLUDED_OPER_CODES.has(item.itemOperCode),
+      )
 
       if (newItems.length === 0) {
         return []
@@ -138,16 +144,18 @@ export class FileDetector implements IFileDetector {
         this.toDetectedFile(item),
       )
 
-      // Update checkpoint to highest historyNo
-      const maxHistoryNo = Math.max(...newItems.map((i) => i.historyNo))
+      // Update checkpoint to highest historyNo (DN 포함 전체 중 max)
+      const allNewItems = history.items.filter((item) => item.historyNo > lastNo)
+      const maxHistoryNo = Math.max(...allNewItems.map((i) => i.historyNo))
       this.state.saveCheckpoint('last_history_no', String(maxHistoryNo))
 
       // Notify handlers
       this.notifyDetection(detectedFiles, 'polling')
 
-      this.logger.info(`Detected ${detectedFiles.length} new files`, {
+      this.logger.info(`Detected ${detectedFiles.length} new events`, {
         count: detectedFiles.length,
         maxHistoryNo,
+        operCodes: [...new Set(newItems.map((i) => i.itemOperCode))],
       })
 
       return detectedFiles
@@ -158,12 +166,22 @@ export class FileDetector implements IFileDetector {
   }
 
   private toDetectedFile(item: UploadHistoryItem): DetectedFile {
+    // 폴더 관련 operCode (FC, FD, FMV, FRN)는 확장자가 없을 수 있음
+    const isFolderOp = ['FC', 'FD', 'FMV', 'FRN'].includes(item.itemOperCode)
+    const fileName = isFolderOp
+      ? item.itemSrcName
+      : `${item.itemSrcName}.${item.itemSrcExtension}`
+    const filePath = isFolderOp
+      ? `${item.itemFolderFullpath}${item.itemSrcName}`
+      : `${item.itemFolderFullpath}${item.itemSrcName}.${item.itemSrcExtension}`
+
     return {
-      fileName: `${item.itemSrcName}.${item.itemSrcExtension}`,
-      filePath: `${item.itemFolderFullpath}${item.itemSrcName}.${item.itemSrcExtension}`,
+      fileName,
+      filePath,
       fileSize: 0, // Size not available in history, will be fetched during download
       historyNo: item.historyNo,
       folderId: String(item.itemFolderId),
+      operCode: item.itemOperCode as OperCode,
     }
   }
 
