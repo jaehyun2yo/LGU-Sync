@@ -82,11 +82,14 @@ async function buildSubFolderTree(
   const results = await Promise.allSettled(
     subFolders.map(async (sf) => {
       let fileCount = 0
+      let totalSize = 0
       try {
         const files = await lguplusClient.getAllFilesDeep(sf.folderId)
-        fileCount = files.filter((f) => !f.isFolder).length
+        const nonFolders = files.filter((f) => !f.isFolder)
+        fileCount = nonFolders.length
+        totalSize = nonFolders.reduce((sum, f) => sum + f.itemSize, 0)
       } catch {
-        // fileCount stays 0
+        // fileCount and totalSize stay 0
       }
       const children = await buildSubFolderTree(sf.folderId, lguplusClient, depth + 1, maxDepth)
       return {
@@ -95,6 +98,7 @@ async function buildSubFolderTree(
         folderName: sf.folderName,
         fileCount,
         syncedCount: 0,
+        totalSize,
         children,
       }
     }),
@@ -357,6 +361,7 @@ export function registerIpcHandlers(services: CoreServices): void {
             folderName: f.lguplus_folder_name,
             fileCount,
             syncedCount: syncedFiles.length,
+            totalSize: 0,
           }
         }),
       )
@@ -635,10 +640,13 @@ export function registerIpcHandlers(services: CoreServices): void {
       const result = await Promise.all(
         rootFolders.map(async (rf) => {
           let fileCount = 0
+          let totalSize = 0
           let children: MigrationFolderInfo[] = []
           try {
             const files = await lguplus.getAllFilesDeep(rf.folderId)
-            fileCount = files.filter((file) => !file.isFolder).length
+            const nonFolders = files.filter((file) => !file.isFolder)
+            fileCount = nonFolders.length
+            totalSize = nonFolders.reduce((sum, f) => sum + f.itemSize, 0)
             children = await buildSubFolderTree(rf.folderId, lguplus)
           } catch {
             // silently fail
@@ -656,6 +664,7 @@ export function registerIpcHandlers(services: CoreServices): void {
             folderName: rf.folderName,
             fileCount,
             syncedCount,
+            totalSize,
             children,
           }
         }),

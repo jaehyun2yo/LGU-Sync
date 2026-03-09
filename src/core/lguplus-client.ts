@@ -36,6 +36,10 @@ interface WhApiResponse {
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
+const API_TIMEOUT_MS = 30_000
+const NETWORK_MAX_RETRIES = 2
+const NETWORK_BASE_DELAY_MS = 1_000
+
 export class LGUplusClient implements ILGUplusClient {
   private baseUrl: string
   private logger: ILogger
@@ -252,20 +256,44 @@ export class LGUplusClient implements ILGUplusClient {
   private async callWhApi(
     body: Record<string, unknown>,
     retryCount = 0,
+    networkRetry = 0,
   ): Promise<WhApiResponse> {
     let res: Response
     try {
-      res = await fetch(`${this.baseUrl}/wh`, {
-        method: 'POST',
-        headers: this.getApiHeaders(),
-        body: JSON.stringify(body),
-      })
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+      try {
+        res = await fetch(`${this.baseUrl}/wh`, {
+          method: 'POST',
+          headers: this.getApiHeaders(),
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+      } finally {
+        clearTimeout(timeoutId)
+      }
     } catch (error) {
       const msg = (error as Error).message ?? 'fetch failed'
-      if (msg.includes('timeout') || msg.includes('ETIMEDOUT')) {
-        throw new NetworkTimeoutError(`LGU+ API timeout: ${msg}`)
+      const isTimeout =
+        (error as Error).name === 'AbortError' ||
+        msg.includes('timeout') ||
+        msg.includes('ETIMEDOUT')
+
+      const networkError = isTimeout
+        ? new NetworkTimeoutError(`LGU+ API timeout: ${msg}`)
+        : new NetworkConnectionError(`LGU+ API connection failed: ${msg}`)
+
+      if (networkRetry < NETWORK_MAX_RETRIES) {
+        const delay = NETWORK_BASE_DELAY_MS * Math.pow(2, networkRetry)
+        this.logger.warn(`Network error, retrying (${networkRetry + 1}/${NETWORK_MAX_RETRIES})`, {
+          error: msg,
+          delayMs: delay,
+        })
+        await new Promise((r) => setTimeout(r, delay))
+        return this.callWhApi(body, retryCount, networkRetry + 1)
       }
-      throw new NetworkConnectionError(`LGU+ API connection failed: ${msg}`)
+
+      throw networkError
     }
 
     this.updateCookies(res)
@@ -476,7 +504,7 @@ export class LGUplusClient implements ILGUplusClient {
     )
 
     // 병렬 batch (한 번에 5페이지씩)
-    const BATCH_SIZE = 5
+    const BATCH_SIZE = 3
     for (let i = 0; i < remainingPages.length; i += BATCH_SIZE) {
       const batch = remainingPages.slice(i, i + BATCH_SIZE)
       try {
@@ -504,9 +532,11 @@ export class LGUplusClient implements ILGUplusClient {
     options?: { maxDepth?: number; concurrency?: number },
   ): Promise<LGUplusFileItem[]> {
     const maxDepth = options?.maxDepth ?? 10
-    const concurrency = options?.concurrency ?? 5
+    const concurrency = options?.concurrency ?? 3
     const allFiles: LGUplusFileItem[] = []
     const visitedFolderIds = new Set<number>()
+    const failedEntries: Array<{ folderId: number; depth: number; relativePath: string }> = []
+    let isRetryPhase = false
 
     // Worker pool: 폴더가 발견되면 즉시 큐에 추가
     const queue: Array<{ folderId: number; depth: number; relativePath: string }> = [
@@ -578,11 +608,20 @@ export class LGUplusClient implements ILGUplusClient {
             }
           }
         } catch (error) {
-          this.logger.warn(`Failed to scan folder ${entry.folderId}, skipping`, {
-            folderId: entry.folderId,
-            relativePath: entry.relativePath,
-            error: (error as Error).message,
-          })
+          if (!isRetryPhase) {
+            this.logger.warn(`Failed to scan folder ${entry.folderId}, will retry later`, {
+              folderId: entry.folderId,
+              relativePath: entry.relativePath,
+              error: (error as Error).message,
+            })
+            failedEntries.push(entry)
+          } else {
+            this.logger.warn(`Retry failed for folder ${entry.folderId}, permanently skipping`, {
+              folderId: entry.folderId,
+              relativePath: entry.relativePath,
+              error: (error as Error).message,
+            })
+          }
         } finally {
           activeWorkers--
           checkDone()
@@ -591,8 +630,26 @@ export class LGUplusClient implements ILGUplusClient {
     }
 
     // concurrency 개수만큼 워커 시작
-    const workers = Array.from({ length: concurrency }, () => processNext())
+    Array.from({ length: concurrency }, () => processNext())
     await allDone
+
+    // 실패한 폴더 재시도
+    if (failedEntries.length > 0) {
+      this.logger.info(`Retrying ${failedEntries.length} failed folder(s)`, { folderId })
+      isRetryPhase = true
+
+      for (const entry of failedEntries) {
+        visitedFolderIds.delete(entry.folderId)
+        queue.push(entry)
+      }
+      failedEntries.length = 0
+
+      const retryDone = new Promise<void>((r) => {
+        resolveAll = r
+      })
+      Array.from({ length: concurrency }, () => processNext())
+      await retryDone
+    }
 
     this.logger.info(`Deep scan complete: ${allFiles.length} files found`, {
       folderId,

@@ -1,6 +1,16 @@
 import { app, BrowserWindow } from 'electron'
+import { execSync } from 'child_process'
 import path from 'path'
 import { createCoreServices, type CoreServices } from '../core/container'
+
+// Ensure UTF-8 console output on Windows (fixes Korean character garbling)
+if (process.platform === 'win32') {
+  try {
+    execSync('chcp 65001', { stdio: 'ignore' })
+  } catch {
+    // ignore — no console attached (e.g. packaged app)
+  }
+}
 import { registerIpcHandlers, bridgeEventsToRenderer, removeAllIpcHandlers } from './ipc-router'
 import { WindowManager } from './window-manager'
 import { TrayManager } from './tray-manager'

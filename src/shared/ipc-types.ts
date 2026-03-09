@@ -277,6 +277,7 @@ export interface MigrationFolderInfo {
   folderName: string
   fileCount: number
   syncedCount: number
+  totalSize: number
   children?: MigrationFolderInfo[]
 }
 

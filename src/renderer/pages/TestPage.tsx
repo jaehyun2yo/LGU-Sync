@@ -42,13 +42,22 @@ interface FileResult {
   uploadSuccess?: boolean
 }
 
-type FolderSortField = 'folderName' | 'fileCount' | 'syncedCount' | 'remaining'
+type FolderSortField = 'folderName' | 'fileCount' | 'syncedCount' | 'remaining' | 'totalSize'
 
 const folderComparators: Record<FolderSortField, (a: MigrationFolderInfo, b: MigrationFolderInfo) => number> = {
   folderName: (a, b) => a.folderName.localeCompare(b.folderName, 'ko'),
   fileCount: (a, b) => a.fileCount - b.fileCount,
   syncedCount: (a, b) => a.syncedCount - b.syncedCount,
   remaining: (a, b) => (a.fileCount - a.syncedCount) - (b.fileCount - b.syncedCount),
+  totalSize: (a, b) => a.totalSize - b.totalSize,
+}
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const value = bytes / Math.pow(1024, i)
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
 }
 
 type ResultSortField = 'success' | 'fileName' | 'fileSize'
@@ -154,6 +163,9 @@ function FolderTreeRow({
         <span className="shrink-0 w-20 text-xs text-muted-foreground text-right tabular-nums">
           {folder.fileCount.toLocaleString('ko-KR')}
         </span>
+        <span className="shrink-0 w-20 text-xs text-muted-foreground text-right tabular-nums">
+          {formatSize(folder.totalSize)}
+        </span>
         <span className="shrink-0 w-20 text-xs text-success text-right tabular-nums">
           {folder.syncedCount.toLocaleString('ko-KR')}
         </span>
@@ -227,7 +239,7 @@ export function TestPage() {
         setFolders(res.data)
         const allIds = collectAllIds(res.data)
         setSelectedIds(new Set(allIds))
-        setExpandedIds(new Set(res.data.map((f) => f.id)))
+        setExpandedIds(new Set())
         setState('selecting')
       } else {
         setError(res.error?.message ?? '스캔 실패')
@@ -486,6 +498,9 @@ export function TestPage() {
               </div>
               <div className="w-20 text-right">
                 <SortableHeader field="fileCount" label="전체 파일" currentField={folderSortField} currentOrder={folderSortOrder} onSort={handleFolderSortChange} className="justify-end" />
+              </div>
+              <div className="w-20 text-right">
+                <SortableHeader field="totalSize" label="용량" currentField={folderSortField} currentOrder={folderSortOrder} onSort={handleFolderSortChange} className="justify-end" />
               </div>
               <div className="w-20 text-right">
                 <SortableHeader field="syncedCount" label="동기화 완료" currentField={folderSortField} currentOrder={folderSortOrder} onSort={handleFolderSortChange} className="justify-end" />

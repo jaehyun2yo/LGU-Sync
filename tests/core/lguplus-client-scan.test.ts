@@ -227,13 +227,13 @@ describe('callWhApi - network error handling', () => {
 
   it('fetch 실패를 NetworkConnectionError로 변환한다', async () => {
     const { NetworkConnectionError } = await import('../../src/core/errors')
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'))
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'))
     await expect(client.getSubFolders(1)).rejects.toThrow(NetworkConnectionError)
   })
 
   it('timeout 에러를 NetworkTimeoutError로 변환한다', async () => {
     const { NetworkTimeoutError } = await import('../../src/core/errors')
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(
       new TypeError('network timeout at: https://test.example.com/wh'),
     )
     await expect(client.getSubFolders(1)).rejects.toThrow(NetworkTimeoutError)
@@ -338,5 +338,161 @@ describe('getAllFilesDeep - error handling', () => {
 
     expect(result).not.toBe('timeout')
     expect(result).toEqual([])
+  })
+})
+
+describe('callWhApi - timeout and retry', () => {
+  let client: LGUplusClient
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    client = new LGUplusClient('https://test.example.com', mockLogger(), mockRetryManager())
+  })
+
+  afterEach(() => {
+    fetchSpy?.mockRestore()
+  })
+
+  it('fetch에 AbortSignal이 전달된다', async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ RESULT_CODE: '0000', ITEM_FOLDER: [] })),
+    )
+
+    await client.getSubFolders(1)
+
+    const callArgs = fetchSpy.mock.calls[0]
+    const init = callArgs[1] as RequestInit
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('AbortError를 NetworkTimeoutError로 변환한다', async () => {
+    const { NetworkTimeoutError } = await import('../../src/core/errors')
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }),
+    )
+    await expect(client.getSubFolders(1)).rejects.toThrow(NetworkTimeoutError)
+  })
+
+  it('네트워크 에러 시 최대 2회 재시도 후 성공한다', async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({
+          RESULT_CODE: '0000',
+          ITEM_FOLDER: [{ FOLDER_ID: 10, FOLDER_NAME: 'A', UPPER_FOLDER_ID: 1 }],
+        })),
+      )
+
+    const folders = await client.getSubFolders(1)
+    expect(folders).toHaveLength(1)
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
+  })
+
+  it('3회 모두 실패하면 NetworkConnectionError를 throw한다', async () => {
+    const { NetworkConnectionError } = await import('../../src/core/errors')
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+
+    await expect(client.getSubFolders(1)).rejects.toThrow(NetworkConnectionError)
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('getAllFilesDeep - folder level retry', () => {
+  let client: LGUplusClient
+
+  beforeEach(() => {
+    client = new LGUplusClient('https://test.example.com', mockLogger(), mockRetryManager())
+  })
+
+  it('1차 실패한 폴더를 2차에서 재시도하여 파일을 수집한다', async () => {
+    let folderBCallCount = 0
+
+    vi.spyOn(client, 'getSubFolders').mockImplementation(async (folderId) => {
+      if (folderId === 1) return [
+        { folderId: 10, folderName: 'A', parentFolderId: 1 },
+        { folderId: 20, folderName: 'B', parentFolderId: 1 },
+      ]
+      return []
+    })
+
+    vi.spyOn(client, 'getAllFiles').mockImplementation(async (folderId) => {
+      if (folderId === 1) return []
+      if (folderId === 10) return [
+        { itemId: 1, itemName: 'a.dxf', itemSize: 100, itemExtension: 'dxf', parentFolderId: 10, updatedAt: '2026-01-01', isFolder: false },
+      ]
+      if (folderId === 20) {
+        folderBCallCount++
+        if (folderBCallCount === 1) throw new Error('Network error')
+        return [
+          { itemId: 2, itemName: 'b.dxf', itemSize: 200, itemExtension: 'dxf', parentFolderId: 20, updatedAt: '2026-01-01', isFolder: false },
+        ]
+      }
+      return []
+    })
+
+    const files = await client.getAllFilesDeep(1, { concurrency: 1 })
+    expect(files).toHaveLength(2)
+    expect(files.map(f => f.itemName).sort()).toEqual(['a.dxf', 'b.dxf'])
+    expect(folderBCallCount).toBe(2)
+  })
+
+  it('2차 재시도도 실패하면 해당 폴더를 최종 스킵한다', async () => {
+    vi.spyOn(client, 'getSubFolders').mockImplementation(async (folderId) => {
+      if (folderId === 1) return [
+        { folderId: 10, folderName: 'A', parentFolderId: 1 },
+        { folderId: 20, folderName: 'B', parentFolderId: 1 },
+      ]
+      return []
+    })
+
+    vi.spyOn(client, 'getAllFiles').mockImplementation(async (folderId) => {
+      if (folderId === 1) return []
+      if (folderId === 10) return [
+        { itemId: 1, itemName: 'a.dxf', itemSize: 100, itemExtension: 'dxf', parentFolderId: 10, updatedAt: '2026-01-01', isFolder: false },
+      ]
+      if (folderId === 20) throw new Error('Persistent network error')
+      return []
+    })
+
+    const files = await client.getAllFilesDeep(1, { concurrency: 1 })
+    expect(files).toHaveLength(1)
+    expect(files[0].itemName).toBe('a.dxf')
+  })
+})
+
+describe('동시성 기본값 축소', () => {
+  let client: LGUplusClient
+
+  beforeEach(() => {
+    client = new LGUplusClient('https://test.example.com', mockLogger(), mockRetryManager())
+  })
+
+  it('getAllFilesDeep 기본 concurrency가 3이다', async () => {
+    let maxActive = 0
+    let active = 0
+
+    vi.spyOn(client, 'getSubFolders').mockImplementation(async (folderId) => {
+      if (folderId === 1) {
+        return Array.from({ length: 10 }, (_, i) => ({
+          folderId: 100 + i, folderName: `f-${i}`, parentFolderId: 1,
+        }))
+      }
+      return []
+    })
+
+    vi.spyOn(client, 'getAllFiles').mockImplementation(async () => {
+      active++
+      maxActive = Math.max(maxActive, active)
+      await new Promise((r) => setTimeout(r, 20))
+      active--
+      return []
+    })
+
+    await client.getAllFilesDeep(1)
+    expect(maxActive).toBeLessThanOrEqual(3)
   })
 })
