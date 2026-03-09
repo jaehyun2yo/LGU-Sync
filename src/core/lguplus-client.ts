@@ -516,11 +516,19 @@ export class LGUplusClient implements ILGUplusClient {
         }
         onProgress?.(batch[batch.length - 1], allFiles.length, total)
       } catch (error) {
-        this.logger.warn(`Failed to fetch page batch for folder ${folderId}`, {
+        this.logger.warn(`Failed to fetch page batch for folder ${folderId}, continuing with remaining pages`, {
           batch,
           error: (error as Error).message,
         })
-        break
+        // 실패한 배치의 개별 페이지를 하나씩 재시도
+        for (const page of batch) {
+          try {
+            const result = await this.getFileList(folderId, { page })
+            allFiles.push(...result.items)
+          } catch {
+            this.logger.warn(`Failed to fetch page ${page} for folder ${folderId}, skipping`)
+          }
+        }
       }
     }
 
