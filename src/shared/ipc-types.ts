@@ -460,24 +460,15 @@ export interface IpcChannelMap {
 // ── Realtime detection test types ──
 
 export interface RealtimeTestStartRequest {
-  /** 감지 시 자동 다운로드 */
-  enableDownload: boolean
-  /** 감지 시 자동 업로드 */
-  enableUpload: boolean
   /** 감지 시 알림 (OS + 앱 내) */
   enableNotification: boolean
-  /** 폴링 주기 (ms), 기본 30000 */
-  pollingIntervalMs?: number
-  /** 감지 전략: snapshot (폴더 스캔) 또는 polling (이력 기반), 기본 snapshot */
-  strategy?: 'polling' | 'snapshot'
 }
 
 export interface RealtimeTestEvent {
-  type: 'started' | 'detecting' | 'detected' | 'downloading' | 'downloaded' | 'uploading' | 'uploaded' | 'error' | 'stopped'
+  type: 'started' | 'detected' | 'error' | 'stopped'
   message: string
   timestamp: string
   fileName?: string
-  success?: boolean
   error?: string
   /** 감지된 변동 유형 (detected 이벤트에서 사용) */
   operCode?: string
@@ -528,6 +519,7 @@ export interface NewFilesEvent {
     folderPath: string
     fileSize: number
     detectedAt: string
+    operCode?: string
   }>
   source: 'polling' | 'snapshot'
 }
@@ -546,12 +538,22 @@ export interface CriticalErrorEvent {
   timestamp: string
 }
 
+export interface OperCodeEvent {
+  operCode: string
+  fileName: string
+  filePath: string
+  folderId: string
+  historyNo?: number
+  timestamp: string
+}
+
 export interface IpcEventMap {
   'sync:progress': SyncProgressEvent
   'sync:file-completed': FileCompletedEvent
   'sync:file-failed': FileFailedEvent
   'sync:status-changed': StatusChangedEvent
   'detection:new-files': NewFilesEvent
+  'opercode:event': OperCodeEvent
   'auth:expired': AuthExpiredEvent
   'error:critical': CriticalErrorEvent
   'test:progress': TestProgressEvent

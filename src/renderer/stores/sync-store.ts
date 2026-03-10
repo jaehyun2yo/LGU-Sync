@@ -29,6 +29,13 @@ interface SyncState {
   todayBytes: number
   activeTransfers: ActiveTransfer[]
   recentFiles: SyncFileInfo[]
+  recentEvents: Array<{
+    operCode: string
+    fileName: string
+    filePath: string
+    folderId: string
+    timestamp: string
+  }>
   failedCount: number
   fullSyncProgress: {
     phase: string
@@ -53,6 +60,7 @@ interface SyncActions {
   handleFileCompleted: (event: FileCompletedEvent) => void
   handleFileFailed: (event: FileFailedEvent) => void
   handleStatusChanged: (event: StatusChangedEvent) => void
+  handleOperCodeEvent: (event: { operCode: string; fileName: string; filePath: string; folderId: string; timestamp: string }) => void
 }
 
 export type SyncStore = SyncState & SyncActions
@@ -68,6 +76,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   todayBytes: 0,
   activeTransfers: [],
   recentFiles: [],
+  recentEvents: [],
   failedCount: 0,
   fullSyncProgress: null,
   lastUpdatedAt: null,
@@ -214,5 +223,11 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
 
   handleStatusChanged: (event) => {
     set({ status: event.currentStatus })
+  },
+
+  handleOperCodeEvent: (event) => {
+    set((state) => ({
+      recentEvents: [event, ...state.recentEvents.slice(0, 49)],
+    }))
   },
 }))

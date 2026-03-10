@@ -3,6 +3,7 @@ import {
   Activity,
   Pause,
   Play,
+  Square,
   RefreshCw,
   CheckCircle,
   XCircle,
@@ -54,6 +55,8 @@ const STATUS_CONFIG: Record<
 
 function FileStatusIcon({ status }: { status: SyncFileStatus }) {
   switch (status) {
+    case 'downloaded':
+      return <CheckCircle className="h-4 w-4 text-info shrink-0" />
     case 'completed':
       return <CheckCircle className="h-4 w-4 text-success shrink-0" />
     case 'downloading':
@@ -76,13 +79,23 @@ function FileStatusIcon({ status }: { status: SyncFileStatus }) {
 // ── SyncStatusCard ──
 
 function SyncStatusCard() {
-  const { status, pause, resume, startFullSync, retryFailed, failedCount, fullSyncProgress } =
+  const { status, start, stop, pause, resume, startFullSync, retryFailed, failedCount, fullSyncProgress } =
     useSyncStore()
   const { showConfirm } = useUiStore()
   const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.idle
 
+  const isIdle = status === 'idle'
   const isPaused = status === 'paused'
   const isSyncing = status === 'syncing'
+  const isRunning = isSyncing || isPaused
+
+  const handleStartStop = () => {
+    if (isRunning) {
+      stop()
+    } else {
+      start()
+    }
+  }
 
   const handlePauseResume = () => {
     if (isPaused) {
@@ -170,24 +183,47 @@ function SyncStatusCard() {
             <RefreshCw className="h-3.5 w-3.5" />
             전체 동기화
           </button>
+          {isRunning && (
+            <button
+              onClick={handlePauseResume}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
+                isPaused
+                  ? 'bg-success/10 text-success hover:bg-success/20'
+                  : 'bg-warning/10 text-warning hover:bg-warning/20',
+              )}
+            >
+              {isPaused ? (
+                <>
+                  <Play className="h-3.5 w-3.5" />
+                  재개
+                </>
+              ) : (
+                <>
+                  <Pause className="h-3.5 w-3.5" />
+                  일시중지
+                </>
+              )}
+            </button>
+          )}
           <button
-            onClick={handlePauseResume}
+            onClick={handleStartStop}
             className={cn(
               'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
-              isPaused
-                ? 'bg-success/10 text-success hover:bg-success/20'
-                : 'bg-warning/10 text-warning hover:bg-warning/20',
+              isRunning
+                ? 'bg-error/10 text-error hover:bg-error/20'
+                : 'bg-success/10 text-success hover:bg-success/20',
             )}
           >
-            {isPaused ? (
+            {isRunning ? (
               <>
-                <Play className="h-3.5 w-3.5" />
-                재개
+                <Square className="h-3.5 w-3.5" />
+                정지
               </>
             ) : (
               <>
-                <Pause className="h-3.5 w-3.5" />
-                일시중지
+                <Play className="h-3.5 w-3.5" />
+                시작
               </>
             )}
           </button>
@@ -252,6 +288,68 @@ function QuickStats() {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── OperCode config ──
+
+const OPERCODE_CONFIG: Record<string, { label: string; colorClass: string; bgClass: string; icon: string }> = {
+  UP: { label: '업로드', colorClass: 'text-success', bgClass: 'bg-success/10', icon: '↑' },
+  CP: { label: '복사', colorClass: 'text-success', bgClass: 'bg-success/10', icon: '⊕' },
+  D: { label: '삭제', colorClass: 'text-error', bgClass: 'bg-error/10', icon: '✕' },
+  MV: { label: '이동', colorClass: 'text-info', bgClass: 'bg-info/10', icon: '→' },
+  RN: { label: '이름변경', colorClass: 'text-warning', bgClass: 'bg-warning/10', icon: '✎' },
+  FC: { label: '폴더생성', colorClass: 'text-purple-500', bgClass: 'bg-purple-500/10', icon: '📁' },
+  FD: { label: '폴더삭제', colorClass: 'text-error', bgClass: 'bg-error/10', icon: '🗑' },
+  FMV: { label: '폴더이동', colorClass: 'text-info', bgClass: 'bg-info/10', icon: '📂→' },
+  FRN: { label: '폴더이름변경', colorClass: 'text-warning', bgClass: 'bg-warning/10', icon: '📝' },
+}
+
+function EventTimeline() {
+  const { recentEvents } = useSyncStore()
+
+  if (recentEvents.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <h3 className="text-sm font-semibold text-card-foreground mb-3">
+        실시간 이벤트
+        <span className="ml-2 text-xs font-normal text-muted-foreground">
+          (최근 {recentEvents.length}건)
+        </span>
+      </h3>
+      <div className="space-y-1 max-h-[200px] overflow-y-auto">
+        {recentEvents.slice(0, 20).map((event, idx) => {
+          const config = OPERCODE_CONFIG[event.operCode] ?? {
+            label: event.operCode,
+            colorClass: 'text-muted-foreground',
+            bgClass: 'bg-muted',
+            icon: '?',
+          }
+          return (
+            <div
+              key={`${event.timestamp}-${idx}`}
+              className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-accent/50 transition-colors"
+            >
+              <span className={cn('text-xs font-mono px-1.5 py-0.5 rounded', config.bgClass, config.colorClass)}>
+                {config.icon}
+              </span>
+              <span className={cn('text-xs font-medium shrink-0', config.colorClass)}>
+                {config.label}
+              </span>
+              <span className="text-xs text-card-foreground truncate flex-1">
+                {event.fileName}
+              </span>
+              <span className="text-[11px] text-muted-foreground shrink-0">
+                {new Date(event.timestamp).toLocaleTimeString('ko-KR')}
+              </span>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -373,6 +471,7 @@ export function DashboardPage() {
     <div className="space-y-4 p-1">
       <SyncStatusCard />
       <QuickStats />
+      <EventTimeline />
       <div className="grid grid-cols-2 gap-4">
         <ActiveTransfers />
         <RecentFilesList />

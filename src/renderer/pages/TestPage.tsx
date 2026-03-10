@@ -249,10 +249,7 @@ export function TestPage() {
   const [realtimeRunning, setRealtimeRunning] = useState(false)
   const [realtimeEvents, setRealtimeEvents] = useState<RealtimeTestEvent[]>([])
   const [realtimeOptions, setRealtimeOptions] = useState({
-    enableDownload: true,
-    enableUpload: true,
     enableNotification: true,
-    strategy: 'snapshot' as 'polling' | 'snapshot',
   })
 
   // Listen for test progress events — route to the correct tab
@@ -384,13 +381,12 @@ export function TestPage() {
   const handleRealtimeStart = useCallback(async () => {
     setRealtimeEvents([])
     const res = await window.electronAPI.invoke('test:realtime-start', {
-      ...realtimeOptions,
-      pollingIntervalMs: 30000,
+      enableNotification: realtimeOptions.enableNotification,
     })
     if (res.success) {
       setRealtimeRunning(true)
     }
-  }, [realtimeOptions])
+  }, [realtimeOptions.enableNotification])
 
   const handleRealtimeStop = useCallback(async () => {
     await window.electronAPI.invoke('test:realtime-stop')
@@ -757,59 +753,23 @@ export function TestPage() {
         <div className="flex flex-col gap-4 flex-1 min-h-0">
           {/* Options */}
           <div className="flex items-center gap-6 p-4 rounded-lg border border-border bg-card">
-            <span className="text-sm font-medium">감지 시 동작:</span>
-            {([
-              { key: 'enableDownload' as const, label: '다운로드', icon: Download },
-              { key: 'enableUpload' as const, label: '업로드', icon: Upload },
-              { key: 'enableNotification' as const, label: '알림', icon: Bell },
-            ]).map(({ key, label, icon: Icon }) => (
-              <label key={key} className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={realtimeOptions[key]}
-                  onChange={(e) =>
-                    setRealtimeOptions((prev) => ({ ...prev, [key]: e.target.checked }))
-                  }
-                  disabled={realtimeRunning}
-                  className="rounded border-border"
-                />
-                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-sm">{label}</span>
-              </label>
-            ))}
-          </div>
-
-          {/* Strategy selector */}
-          <div className="flex items-center gap-6 p-4 rounded-lg border border-border bg-card">
-            <span className="text-sm font-medium">감지 전략:</span>
+            <span className="text-sm font-medium">옵션:</span>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
-                type="radio"
-                name="strategy"
-                value="snapshot"
-                checked={realtimeOptions.strategy === 'snapshot'}
-                onChange={() =>
-                  setRealtimeOptions((prev) => ({ ...prev, strategy: 'snapshot' as const }))
+                type="checkbox"
+                checked={realtimeOptions.enableNotification}
+                onChange={(e) =>
+                  setRealtimeOptions((prev) => ({ ...prev, enableNotification: e.target.checked }))
                 }
                 disabled={realtimeRunning}
-                className="border-border"
+                className="rounded border-border"
               />
-              <span className="text-sm">Snapshot (폴더 스캔)</span>
+              <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-sm">알림</span>
             </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="strategy"
-                value="polling"
-                checked={realtimeOptions.strategy === 'polling'}
-                onChange={() =>
-                  setRealtimeOptions((prev) => ({ ...prev, strategy: 'polling' as const }))
-                }
-                disabled={realtimeRunning}
-                className="border-border"
-              />
-              <span className="text-sm">Polling (이력 기반)</span>
-            </label>
+            <span className="text-xs text-muted-foreground">
+              프로덕션 파이프라인 (Polling 이력 기반) 사용
+            </span>
           </div>
 
           {/* Start/Stop button */}
@@ -896,10 +856,7 @@ export function TestPage() {
 function getEventColor(type: RealtimeTestEvent['type']): string {
   switch (type) {
     case 'started': return 'text-info'
-    case 'detecting': return 'text-muted-foreground'
     case 'detected': return 'text-warning'
-    case 'downloading': case 'uploading': return 'text-info'
-    case 'downloaded': case 'uploaded': return 'text-success'
     case 'error': return 'text-error'
     case 'stopped': return 'text-muted-foreground'
     default: return 'text-foreground'
@@ -909,12 +866,7 @@ function getEventColor(type: RealtimeTestEvent['type']): string {
 function getEventLabel(type: RealtimeTestEvent['type']): string {
   switch (type) {
     case 'started': return '시작'
-    case 'detecting': return '감지중'
     case 'detected': return '감지됨'
-    case 'downloading': return '다운로드'
-    case 'downloaded': return '완료'
-    case 'uploading': return '업로드'
-    case 'uploaded': return '완료'
     case 'error': return '오류'
     case 'stopped': return '중지'
     default: return type

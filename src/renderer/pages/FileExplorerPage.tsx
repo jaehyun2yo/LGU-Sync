@@ -40,6 +40,8 @@ function statusIcon(status: SyncFileStatus) {
     case 'ul_failed':
     case 'dlq':
       return <XCircle className="h-4 w-4 text-error" />
+    case 'source_deleted':
+      return <XCircle className="h-4 w-4 text-error/60" />
     case 'skipped':
       return <Clock className="h-4 w-4 text-muted-foreground" />
     default:
@@ -56,6 +58,7 @@ function statusText(status: SyncFileStatus): string {
     ul_failed: '업로드 실패',
     completed: '완료',
     skipped: '건너뜀',
+    source_deleted: '원본 삭제됨',
     dlq: '대기열',
   }
   return map[status] ?? status
@@ -307,6 +310,7 @@ function FileTable({
                       file.status === 'dlq') &&
                       'bg-error/10 text-error',
                     file.status === 'skipped' && 'bg-muted text-muted-foreground',
+                    file.status === 'source_deleted' && 'bg-error/5 text-error/60',
                   )}
                 >
                   {statusText(file.status)}

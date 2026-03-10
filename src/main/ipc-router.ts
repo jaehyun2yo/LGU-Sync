@@ -6,7 +6,7 @@ import type { CoreServices } from '../core/container'
 import type { ApiResponse, IpcEventMap, MigrationFolderInfo, RealtimeTestStartRequest, RealtimeTestEvent } from '../shared/ipc-types'
 import type { ILGUplusClient, LGUplusFolderItem, LGUplusFileItem } from '../core/types/lguplus-client.types'
 import type { LogRow, LogQuery, SyncFolderRow } from '../core/db/types'
-import { FileDetector } from '../core/file-detector'
+import type { DetectedFile, DetectionStrategy } from '../core/types/events.types'
 
 function ok<T>(data: T): ApiResponse<T> {
   return { success: true, data, timestamp: new Date().toISOString() }
@@ -581,7 +581,7 @@ export function registerIpcHandlers(services: CoreServices): void {
         return ok({
           success: result.success,
           latencyMs: Date.now() - start,
-          message: result.success ? 'Connected' : 'Login failed',
+          message: result.success ? 'Connected' : (result.message || 'Login failed'),
         })
       } else {
         const start = Date.now()
@@ -1143,8 +1143,8 @@ export function registerIpcHandlers(services: CoreServices): void {
 
   // ── Realtime detection test ──
 
-  let realtimeTestTimer: ReturnType<typeof setInterval> | null = null
   let realtimeTestRunning = false
+  let realtimeCleanup: (() => void) | null = null
 
   ipcMain.handle('test:realtime-start', async (_event, request: RealtimeTestStartRequest) => {
     try {
@@ -1152,140 +1152,76 @@ export function registerIpcHandlers(services: CoreServices): void {
         return fail('REALTIME_ALREADY_RUNNING', '실시간 감지가 이미 실행 중입니다.')
       }
       realtimeTestRunning = true
-      const intervalMs = request.pollingIntervalMs ?? 30000
-      const strategy = request.strategy ?? 'snapshot'
-
-      // 요청된 strategy에 맞는 임시 FileDetector 생성
-      const testDetector = new FileDetector(
-        lguplus,
-        state,
-        services.eventBus,
-        services.logger,
-        { pollingIntervalMs: intervalMs, strategy },
-      )
 
       const sendEvent = (evt: RealtimeTestEvent): void => {
         _event.sender.send('test:realtime-event', evt)
       }
 
-      const strategyLabel = strategy === 'snapshot' ? '스냅샷' : '폴링'
+      // 1. 폴더 자동 발견 및 DB 등록 (미등록 폴더 → 감지 스킵 방지)
       sendEvent({
         type: 'started',
-        message: `실시간 감지 시작 (주기: ${intervalMs / 1000}초, 전략: ${strategyLabel})`,
+        message: '폴더 발견 중...',
+        timestamp: new Date().toISOString(),
+      })
+      const discovery = await folderDiscovery.discoverFolders()
+      sendEvent({
+        type: 'started',
+        message: `폴더 ${discovery.total}개 등록 (신규 ${discovery.newFolders}개)`,
         timestamp: new Date().toISOString(),
       })
 
-      const poll = async (): Promise<void> => {
+      // 2. 프로덕션 엔진이 이미 실행 중이 아니면 시작
+      const engineWasIdle = engine.status !== 'syncing'
+      if (engineWasIdle) {
+        await engine.start()
+      }
+
+      sendEvent({
+        type: 'started',
+        message: `실시간 감지 시작 (폴링, 프로덕션 파이프라인 구독)`,
+        timestamp: new Date().toISOString(),
+      })
+
+      // 프로덕션 EventBus의 detection:found 구독 → UI로 전달
+      const onDetection = async ({ files, strategy }: { files: DetectedFile[]; strategy: DetectionStrategy }): Promise<void> => {
         if (!realtimeTestRunning) return
 
-        sendEvent({
-          type: 'detecting',
-          message: `새 파일 감지 중... (${strategyLabel})`,
-          timestamp: new Date().toISOString(),
-        })
+        if (request.enableNotification && files.length > 0) {
+          const { Notification: ElectronNotification } = await import('electron')
+          new ElectronNotification({
+            title: '새 이벤트 감지됨',
+            body: `${files.length}개 이벤트가 감지되었습니다.`,
+          }).show()
 
-        try {
-          const detected = await testDetector.forceCheck()
-          if (detected.length === 0) return
+          notification.notify({
+            type: 'info',
+            title: '새 이벤트 감지',
+            message: `${files.length}개 이벤트가 감지되었습니다.`,
+            groupKey: 'realtime-detection',
+          })
+        }
 
-          if (request.enableNotification) {
-            const { Notification: ElectronNotification } = await import('electron')
-            new ElectronNotification({
-              title: '새 파일 감지됨',
-              body: `${detected.length}개 파일이 감지되었습니다.`,
-            }).show()
-
-            notification.notify({
-              type: 'info',
-              title: '새 파일 감지',
-              message: `${detected.length}개 파일이 감지되었습니다.`,
-              groupKey: 'realtime-detection',
-            })
-          }
-
-          for (const file of detected) {
-            const operLabel = getOperCodeLabel(file.operCode)
-            sendEvent({
-              type: 'detected',
-              message: `[${file.operCode}] ${operLabel}: ${file.fileName}`,
-              timestamp: new Date().toISOString(),
-              fileName: file.fileName,
-              operCode: file.operCode,
-            })
-
-            // UP/CP만 다운로드/업로드 처리, 나머지는 감지 이벤트만 발행
-            if (file.operCode !== 'UP' && file.operCode !== 'CP') continue
-            if (!request.enableDownload && !request.enableUpload) continue
-
-            const dbFolder = state.getFolderByLguplusId(file.folderId)
-            if (!dbFolder) continue
-
-            const fileId = state.saveFile({
-              folder_id: dbFolder.id,
-              file_name: file.fileName,
-              file_path: file.filePath,
-              file_size: file.fileSize,
-              file_extension: file.fileName.split('.').pop() ?? '',
-              lguplus_file_id: String(file.historyNo),
-              detected_at: new Date().toISOString(),
-            })
-
-            if (request.enableDownload) {
-              sendEvent({
-                type: 'downloading',
-                message: `다운로드 중: ${file.fileName}`,
-                timestamp: new Date().toISOString(),
-                fileName: file.fileName,
-              })
-
-              const dlResult = await engine.downloadOnly(fileId)
-              sendEvent({
-                type: 'downloaded',
-                message: dlResult.success
-                  ? `다운로드 완료: ${file.fileName}`
-                  : `다운로드 실패: ${file.fileName}`,
-                timestamp: new Date().toISOString(),
-                fileName: file.fileName,
-                success: dlResult.success,
-                error: dlResult.error,
-              })
-
-              if (!dlResult.success) continue
-            }
-
-            if (request.enableUpload) {
-              sendEvent({
-                type: 'uploading',
-                message: `업로드 중: ${file.fileName}`,
-                timestamp: new Date().toISOString(),
-                fileName: file.fileName,
-              })
-
-              const ulResult = await engine.uploadOnly(fileId)
-              sendEvent({
-                type: 'uploaded',
-                message: ulResult.success
-                  ? `업로드 완료: ${file.fileName}`
-                  : `업로드 실패: ${file.fileName}`,
-                timestamp: new Date().toISOString(),
-                fileName: file.fileName,
-                success: ulResult.success,
-                error: ulResult.error,
-              })
-            }
-          }
-        } catch (e) {
+        for (const file of files) {
+          const operLabel = getOperCodeLabel(file.operCode)
           sendEvent({
-            type: 'error',
-            message: `감지 오류: ${(e as Error).message}`,
+            type: 'detected',
+            message: `[${file.operCode}] ${operLabel}: ${file.fileName}`,
             timestamp: new Date().toISOString(),
-            error: (e as Error).message,
+            fileName: file.fileName,
+            operCode: file.operCode,
           })
         }
       }
 
-      poll()
-      realtimeTestTimer = setInterval(poll, intervalMs)
+      services.eventBus.on('detection:found', onDetection)
+
+      // cleanup 함수 저장 (stop 시 호출)
+      realtimeCleanup = () => {
+        services.eventBus.off('detection:found', onDetection)
+        if (engineWasIdle) {
+          engine.stop()
+        }
+      }
 
       return ok(undefined)
     } catch (e) {
@@ -1296,11 +1232,12 @@ export function registerIpcHandlers(services: CoreServices): void {
 
   ipcMain.handle('test:realtime-stop', async () => {
     try {
-      if (realtimeTestTimer) {
-        clearInterval(realtimeTestTimer)
-        realtimeTestTimer = null
-      }
       realtimeTestRunning = false
+
+      if (realtimeCleanup) {
+        realtimeCleanup()
+        realtimeCleanup = null
+      }
 
       const [win] = BrowserWindow.getAllWindows()
       if (win && !win.isDestroyed()) {
