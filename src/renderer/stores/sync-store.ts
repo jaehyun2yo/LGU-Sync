@@ -36,6 +36,7 @@ interface SyncState {
     folderId: string
     timestamp: string
   }>
+  circuits: Record<string, 'CLOSED' | 'OPEN' | 'HALF_OPEN'>
   failedCount: number
   fullSyncProgress: {
     phase: string
@@ -55,6 +56,7 @@ interface SyncActions {
   pause: () => Promise<void>
   resume: () => Promise<void>
   startFullSync: (folderIds?: string[]) => Promise<FullSyncResult | null>
+  resetCircuit: (circuitName: string) => Promise<void>
   retryFailed: (eventIds?: string[]) => Promise<void>
   handleProgress: (event: SyncProgressEvent) => void
   handleFileCompleted: (event: FileCompletedEvent) => void
@@ -77,6 +79,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   activeTransfers: [],
   recentFiles: [],
   recentEvents: [],
+  circuits: {},
   failedCount: 0,
   fullSyncProgress: null,
   lastUpdatedAt: null,
@@ -98,6 +101,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
           todayFailed: d.today.failedFiles,
           todayBytes: d.today.totalBytes,
           recentFiles: d.recentFiles,
+          circuits: d.circuits ?? {},
           failedCount: d.failedCount,
           fullSyncProgress: d.currentOperation
             ? {
@@ -149,6 +153,11 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       return res.data
     }
     return null
+  },
+
+  resetCircuit: async (circuitName) => {
+    await window.electronAPI.invoke('sync:reset-circuit', { circuitName })
+    await get().fetchStatus()
   },
 
   retryFailed: async (eventIds) => {

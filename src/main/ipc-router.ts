@@ -245,6 +245,16 @@ export function registerIpcHandlers(services: CoreServices): void {
     }
   })
 
+  ipcMain.handle('sync:reset-circuit', async (_event, request) => {
+    try {
+      const { circuitName } = request
+      retry.resetCircuit(circuitName)
+      return ok(undefined)
+    } catch (e) {
+      return fail('RESET_CIRCUIT_FAILED', (e as Error).message)
+    }
+  })
+
   // ── Files ──
 
   ipcMain.handle('files:list', async (_event, request) => {
@@ -1430,6 +1440,7 @@ function buildSyncStatus(services: CoreServices) {
     },
     recentFiles: topRecentFiles,
     failedCount: state.getDlqItems().length,
+    circuits: services.retry.getAllCircuitStates(),
     lastUpdatedAt: new Date().toISOString(),
   }
 }
@@ -1449,7 +1460,7 @@ function mapFileRow(f: any) {
 export function removeAllIpcHandlers(): void {
   const channels = [
     'sync:start', 'sync:stop', 'sync:pause', 'sync:resume', 'sync:status',
-    'sync:full-sync', 'sync:retry-failed',
+    'sync:full-sync', 'sync:retry-failed', 'sync:reset-circuit',
     'files:list', 'files:detail', 'files:search',
     'folders:list', 'folders:tree', 'folders:toggle', 'folders:discover',
     'migration:scan', 'migration:start',

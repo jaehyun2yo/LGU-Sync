@@ -127,6 +127,14 @@ export class RetryManager implements IRetryManager {
     this.circuits.delete(name)
   }
 
+  getAllCircuitStates(): Record<string, CircuitState> {
+    const states: Record<string, CircuitState> = {}
+    for (const [name] of this.circuits) {
+      states[name] = this.getCircuitState(name)
+    }
+    return states
+  }
+
   getDlqItems(): DlqItem[] {
     // DLQ is managed by StateManager, not RetryManager directly
     return []

@@ -264,4 +264,37 @@ describe('RetryManager', () => {
       expect(result).toEqual({ total: 0, succeeded: 0, failed: 0 })
     })
   })
+
+  // ── getAllCircuitStates ──
+
+  describe('getAllCircuitStates', () => {
+    it('등록된 모든 서킷의 상태를 반환한다', async () => {
+      const circuitRetry = new RetryManager(logger, { failureThreshold: 2, resetTimeoutMs: 100 })
+
+      // circuit-a를 OPEN으로
+      const alwaysFail = () => Promise.reject(new Error('fail'))
+      for (let i = 0; i < 3; i++) {
+        try {
+          await circuitRetry.execute(alwaysFail, { maxRetries: 0, circuitName: 'circuit-a' })
+        } catch {
+          // expected
+        }
+      }
+      // circuit-b: 1회 실패 후 성공 → CLOSED (서킷 맵에 등록됨)
+      try {
+        await circuitRetry.execute(alwaysFail, { maxRetries: 0, circuitName: 'circuit-b' })
+      } catch {
+        // expected
+      }
+      await circuitRetry.execute(() => Promise.resolve('ok'), { circuitName: 'circuit-b' })
+
+      const states = circuitRetry.getAllCircuitStates()
+      expect(states['circuit-a']).toBe('OPEN')
+      expect(states['circuit-b']).toBe('CLOSED')
+    })
+
+    it('서킷이 없으면 빈 객체를 반환한다', () => {
+      expect(retry.getAllCircuitStates()).toEqual({})
+    })
+  })
 })
