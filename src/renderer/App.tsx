@@ -52,8 +52,16 @@ function PageRouter() {
 
 function App() {
   const { setPage } = useUiStore()
-  const { fetchStatus, handleProgress, handleFileCompleted, handleFileFailed, handleStatusChanged } =
-    useSyncStore()
+  const {
+    fetchStatus,
+    handleProgress,
+    handleFileCompleted,
+    handleFileFailed,
+    handleStatusChanged,
+    handleOperCodeEvent,
+    handleScanProgress,
+    handleNewFiles,
+  } = useSyncStore()
   const { fetchNotifications } = useNotificationStore()
 
   // Notification orchestrator
@@ -73,11 +81,17 @@ function App() {
   const onFileCompleted = useCallback(handleFileCompleted, [handleFileCompleted])
   const onFileFailed = useCallback(handleFileFailed, [handleFileFailed])
   const onStatusChanged = useCallback(handleStatusChanged, [handleStatusChanged])
+  const onOperCodeEvent = useCallback(handleOperCodeEvent, [handleOperCodeEvent])
+  const onScanProgress = useCallback(handleScanProgress, [handleScanProgress])
+  const onNewFiles = useCallback(handleNewFiles, [handleNewFiles])
 
   useIpcEvent('sync:progress', onProgress)
   useIpcEvent('sync:file-completed', onFileCompleted)
   useIpcEvent('sync:file-failed', onFileFailed)
   useIpcEvent('sync:status-changed', onStatusChanged)
+  useIpcEvent('opercode:event', onOperCodeEvent)
+  useIpcEvent('detection:scan-progress', onScanProgress)
+  useIpcEvent('detection:new-files', onNewFiles)
 
   // Keyboard shortcuts
   useEffect(() => {

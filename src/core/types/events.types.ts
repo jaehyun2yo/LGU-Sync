@@ -50,6 +50,12 @@ export interface EventMap {
     durationMs: number
   }
   'detection:found': { files: DetectedFile[]; strategy: DetectionStrategy }
+  'detection:scan-progress': {
+    phase: 'polling' | 'paginating'
+    currentPage: number
+    totalPages: number
+    discoveredCount: number
+  }
   'opercode:event': {
     operCode: OperCode
     fileName: string

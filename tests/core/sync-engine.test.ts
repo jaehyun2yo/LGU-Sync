@@ -806,6 +806,62 @@ describe('SyncEngine', () => {
     })
   })
 
+  // ── 동시성 - start() 중복 호출 ──
+
+  describe('start() 중복 호출 방지', () => {
+    it('start() 2회 연속 호출 시 onFilesDetected 핸들러는 1번만 등록된다', async () => {
+      await engine.start()
+      await engine.start() // 두 번째 호출 → status=syncing이라 리턴
+
+      // onFilesDetected는 1번만 호출되어야 함
+      expect(detector.onFilesDetected).toHaveBeenCalledTimes(1)
+    })
+
+    it('start() → stop() → start() 순서에서 핸들러가 정확히 1개 활성화된다', async () => {
+      await engine.start()
+      await engine.stop()
+      await engine.start()
+
+      // 이전 구독 해제 후 새 구독 → 총 2회 onFilesDetected 호출 (각 start마다 1회)
+      expect(detector.onFilesDetected).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ── drainQueue - 폴더 미발견 시 큐 처리 ──
+
+  describe('drainQueue() - 폴더 미발견 시 처리', () => {
+    it('폴더 미발견 파일을 건너뛰고 큐의 다음 파일을 정상 처리한다', async () => {
+      // maxConcurrent=5이므로 슬롯이 가득 찰 때까지 동기화가 필요
+      // 간단하게: 폴더 미발견 → drainQueue 호출 확인
+      await engine.start()
+
+      // 첫 번째 파일: 폴더 미발견 → 건너뜀
+      // 두 번째 파일: 폴더 있음 → saveFile 호출
+      ;(state.getFolderByLguplusId as ReturnType<typeof vi.fn>)
+        .mockReturnValueOnce(null) // 첫 파일: 폴더 없음
+        .mockReturnValue({
+          id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트',
+        })
+
+      const file1: DetectedFile = {
+        fileName: 'unknown-folder.dxf', filePath: '/unknown-folder.dxf', fileSize: 512,
+        folderId: '9999', operCode: 'UP', historyNo: 901,
+      }
+      const file2: DetectedFile = {
+        fileName: 'known-folder.dxf', filePath: '/known-folder.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'UP', historyNo: 902,
+      }
+
+      detector._handlers[0]([file1, file2], 'polling')
+      await new Promise(r => setTimeout(r, 20))
+
+      // file1은 건너뛰고 file2만 saveFile 호출
+      const calls = (state.saveFile as ReturnType<typeof vi.fn>).mock.calls
+      expect(calls.length).toBe(1)
+      expect(calls[0][0].file_name).toBe('known-folder.dxf')
+    })
+  })
+
   describe('sync:failed 이벤트', () => {
     it('다운로드 실패 시 sync:failed 이벤트가 발행된다', async () => {
       const handler = vi.fn()

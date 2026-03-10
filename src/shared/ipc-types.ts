@@ -552,12 +552,20 @@ export interface OperCodeEvent {
   timestamp: string
 }
 
+export interface ScanProgressEvent {
+  phase: 'polling' | 'paginating'
+  currentPage: number
+  totalPages: number
+  discoveredCount: number
+}
+
 export interface IpcEventMap {
   'sync:progress': SyncProgressEvent
   'sync:file-completed': FileCompletedEvent
   'sync:file-failed': FileFailedEvent
   'sync:status-changed': StatusChangedEvent
   'detection:new-files': NewFilesEvent
+  'detection:scan-progress': ScanProgressEvent
   'opercode:event': OperCodeEvent
   'auth:expired': AuthExpiredEvent
   'error:critical': CriticalErrorEvent

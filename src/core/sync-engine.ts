@@ -63,6 +63,9 @@ export class SyncEngine implements ISyncEngine {
     this._status = 'syncing'
     this.deps.eventBus.emit('engine:status', { prev, next: 'syncing' })
 
+    // 핸들러 중복 방지: 기존 구독이 있으면 먼저 해제
+    this.detectionUnsubscribe?.()
+
     // Subscribe to file detection events
     this.detectionUnsubscribe = this.deps.detector.onFilesDetected(
       (files, strategy) => this.handleDetectedFiles(files, strategy),
@@ -661,6 +664,7 @@ export class SyncEngine implements ISyncEngine {
       this.logger.warn(
         `Skipping file ${detected.fileName}: no registered folder for LGU+ folder ID ${detected.folderId}`,
       )
+      this.drainQueue()
       return
     }
 

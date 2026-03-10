@@ -7,8 +7,11 @@ import type {
   FileCompletedEvent,
   FileFailedEvent,
   StatusChangedEvent,
+  ScanProgressEvent,
+  NewFilesEvent,
 } from '../../shared/ipc-types'
 import type { SyncStatusType } from '../../core/types/sync-status.types'
+import { buildFileTree, type FileTreeNode } from '../lib/buildFileTree'
 
 interface ActiveTransfer {
   fileId: string
@@ -47,6 +50,8 @@ interface SyncState {
   } | null
   lastUpdatedAt: string | null
   isLoading: boolean
+  scanProgress: ScanProgressEvent | null
+  detectedFileTree: FileTreeNode[]
 }
 
 interface SyncActions {
@@ -63,6 +68,8 @@ interface SyncActions {
   handleFileFailed: (event: FileFailedEvent) => void
   handleStatusChanged: (event: StatusChangedEvent) => void
   handleOperCodeEvent: (event: { operCode: string; fileName: string; filePath: string; folderId: string; timestamp: string }) => void
+  handleScanProgress: (event: ScanProgressEvent) => void
+  handleNewFiles: (event: NewFilesEvent) => void
 }
 
 export type SyncStore = SyncState & SyncActions
@@ -84,6 +91,8 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   fullSyncProgress: null,
   lastUpdatedAt: null,
   isLoading: false,
+  scanProgress: null,
+  detectedFileTree: [],
 
   fetchStatus: async () => {
     set({ isLoading: true })
@@ -238,5 +247,13 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     set((state) => ({
       recentEvents: [event, ...state.recentEvents.slice(0, 49)],
     }))
+  },
+
+  handleScanProgress: (event) => {
+    set({ scanProgress: event })
+  },
+
+  handleNewFiles: (event) => {
+    set({ detectedFileTree: buildFileTree(event.files) })
   },
 }))

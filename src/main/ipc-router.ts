@@ -1389,8 +1389,27 @@ export function bridgeEventsToRenderer(
           folderPath: f.filePath,
           fileSize: f.fileSize,
           detectedAt: new Date().toISOString(),
+          operCode: f.operCode,
         })),
         source: data.strategy as 'polling' | 'snapshot',
+      })
+    },
+    'detection:scan-progress': (data: { phase: 'polling' | 'paginating'; currentPage: number; totalPages: number; discoveredCount: number }) => {
+      send('detection:scan-progress', {
+        phase: data.phase,
+        currentPage: data.currentPage,
+        totalPages: data.totalPages,
+        discoveredCount: data.discoveredCount,
+      })
+    },
+    'opercode:event': (data: { operCode: string; fileName: string; filePath: string; folderId: string; historyNo?: number; timestamp: string }) => {
+      send('opercode:event', {
+        operCode: data.operCode,
+        fileName: data.fileName,
+        filePath: data.filePath,
+        folderId: data.folderId,
+        historyNo: data.historyNo,
+        timestamp: data.timestamp,
       })
     },
     'session:expired': (data: { reason: string }) => {
@@ -1401,7 +1420,7 @@ export function bridgeEventsToRenderer(
         requiresManualAction: true,
       })
     },
-  } as const
+  }
 
   // Register handlers
   for (const [event, handler] of Object.entries(handlers)) {
