@@ -18,6 +18,7 @@ import {
   NetworkConnectionError,
   NetworkTimeoutError,
   ApiResponseParseError,
+  FileDownloadUrlFetchError,
   FileDownloadNotFoundError,
   FileDownloadTransferError,
   FileDownloadSizeMismatchError,
@@ -947,7 +948,10 @@ export class LGUplusClient implements ILGUplusClient {
   ): Promise<DownloadResult> {
     const info = await this.getDownloadUrlInfo(fileId)
     if (!info) {
-      return { success: false, size: 0, filename: '' }
+      throw new FileDownloadUrlFetchError(
+        `Failed to get download URL for file ${fileId}`,
+        { fileId },
+      )
     }
 
     // Build download URL with auth params

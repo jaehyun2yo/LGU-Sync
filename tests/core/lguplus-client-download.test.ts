@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { LGUplusClient } from '../../src/core/lguplus-client'
+import { FileDownloadUrlFetchError } from '../../src/core/errors'
 import type { ILogger } from '../../src/core/types/logger.types'
-import type { IRetryManager } from '../../src/core/types/retry.types'
+import type { IRetryManager } from '../../src/core/types/retry-manager.types'
 
 // Mock fs/promises to avoid actual file writes
 vi.mock('node:fs/promises', () => ({
@@ -168,5 +169,41 @@ describe('downloadFile streaming progress', () => {
     expect(result.success).toBe(true)
     // Fallback should still call onProgress at least once
     expect(onProgress).toHaveBeenCalledWith(totalSize, totalSize)
+  })
+})
+
+describe('downloadFile error handling', () => {
+  let client: LGUplusClient
+  let originalFetch: typeof globalThis.fetch
+
+  beforeEach(() => {
+    const mockLogger = createMockLogger()
+    const mockRetry = createMockRetry()
+    client = new LGUplusClient('https://only.webhard.co.kr', mockLogger, mockRetry)
+    originalFetch = globalThis.fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  it('getDownloadUrlInfo가 null이면 FileDownloadUrlFetchError를 throw한다', async () => {
+    vi.spyOn(client as any, 'getDownloadUrlInfo').mockResolvedValue(null)
+
+    await expect(client.downloadFile(12345, '/tmp/test.dxf')).rejects.toThrow(
+      /Failed to get download URL/,
+    )
+  })
+
+  it('throw된 에러가 FileDownloadUrlFetchError 인스턴스이다', async () => {
+    vi.spyOn(client as any, 'getDownloadUrlInfo').mockResolvedValue(null)
+
+    try {
+      await client.downloadFile(99999, '/tmp/test.dxf')
+      expect.unreachable('should have thrown')
+    } catch (err) {
+      expect(err).toBeInstanceOf(FileDownloadUrlFetchError)
+      expect((err as any).context.fileId).toBe(99999)
+    }
   })
 })
