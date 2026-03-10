@@ -260,6 +260,14 @@ export class SyncEngine implements ISyncEngine {
         ? Number(file.lguplus_file_id)
         : file.history_no ?? 0
 
+      if (!lguplusFileId) {
+        const errMsg = `No LGU+ file ID available for file ${fileId} (${file.file_name})`
+        this.logger.error(errMsg)
+        this.deps.state.updateFileStatus(fileId, 'dl_failed', { last_error: errMsg })
+        this.emitSyncFailed(errMsg, fileId)
+        return { success: false, fileId, error: errMsg }
+      }
+
       const segments = this.getPathSegments(file.file_path)
       const subPath = segments.join('/')
       const destPath = subPath

@@ -789,6 +789,20 @@ describe('SyncEngine', () => {
         }),
       )
     })
+
+    it('lguplus_file_id가 없고 history_no도 없으면 에러를 반환한다', async () => {
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', folder_id: 'folder1', file_name: 'test.dxf', file_path: '/test.dxf',
+        file_size: 1024, status: 'detected',
+        lguplus_file_id: null, history_no: null,
+      })
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {})
+
+      const result = await engine.downloadOnly('f1')
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('No LGU+ file ID')
+    })
   })
 
   describe('sync:failed 이벤트', () => {
