@@ -15,7 +15,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "test:integration": "npx tsx tests/integration/connection-test.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "npx playwright test",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
