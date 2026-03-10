@@ -19,6 +19,7 @@ npm run test             # Vitest 단위 테스트 (1회)
 npm run test:watch       # Vitest 워치 모드
 npm run test:coverage    # 커버리지 측정
 npx vitest run tests/core/some.test.ts  # 단일 테스트 파일 실행
+npm run test:integration # 실서버 연결 통합 테스트
 npm run test:e2e         # Playwright E2E 테스트
 npm run rebuild          # better-sqlite3 네이티브 모듈 재빌드
 npm run dist             # NSIS 인스톨러 생성 (Windows x64)
@@ -77,6 +78,15 @@ Zustand v5 스토어 5개: `sync-store`, `log-store`, `settings-store`, `notific
 - `tests/renderer/`: 렌더러 유틸 테스트
 - `tests/mocks/`: MSW 핸들러 (lguplus, yjlaser API 목)
 - `tests/e2e/`: Playwright (직렬 실행, 워커 1개)
+
+## 에이전트 팀
+
+다운로드 파이프라인 관련 작업(버그 수정, 기능 개선, 코드 리뷰, 디버깅) 시 **다운로드 팀**을 호출하여 멀티 에이전트로 작업한다.
+
+- **트리거:** 사용자가 "다운로드 팀", "다운로드팀"을 언급하면 `.claude/skills/download-pipeline-team.md` 스킬을 호출
+- **스킬 파일:** `.claude/skills/download-pipeline-team.md`
+- **팀 구성:** TeamCreate → TaskCreate → Agent 스폰 (reviewer, analyzer, implementer, tester, verifier)
+- **이슈 카탈로그:** 스킬 파일 내 86건의 알려진 이슈 목록 참조 필수
 
 ## 설계 문서
 

@@ -212,7 +212,7 @@ export class SyncEngine implements ISyncEngine {
         file_path: `/${folder.lguplus_folder_name}/${subPath}${file.itemName}`,
         file_size: file.itemSize,
         file_extension: file.itemExtension,
-        lguplus_file_id: String(file.itemId),
+        lguplus_file_id: String(file.itemSrcNo ?? file.itemId),
         detected_at: new Date().toISOString(),
       })
 

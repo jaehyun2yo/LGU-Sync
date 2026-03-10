@@ -15,7 +15,7 @@ export interface CircuitBreakerConfig {
 }
 
 const DEFAULT_CIRCUIT_CONFIG: CircuitBreakerConfig = {
-  failureThreshold: 5,
+  failureThreshold: 15,
   resetTimeoutMs: 10000,
 }
 
@@ -84,12 +84,7 @@ export class RetryManager implements IRetryManager {
           throw error
         }
 
-        // Record circuit failure
-        if (circuitName) {
-          this.recordFailure(circuitName)
-        }
-
-        // If we've exhausted retries, throw
+        // If we've exhausted retries, break out of loop
         if (attempt >= maxRetries) {
           break
         }
@@ -103,6 +98,11 @@ export class RetryManager implements IRetryManager {
           circuitName,
         })
       }
+    }
+
+    // Record circuit failure only once after all retries exhausted
+    if (circuitName) {
+      this.recordFailure(circuitName)
     }
 
     throw lastError!

@@ -440,7 +440,7 @@ export class LGUplusClient implements ILGUplusClient {
 
       const text = await this.decodeResponse(res)
 
-      // 빈 응답
+      // 빈 응답 = 정상 처리 (폴더/파일이 없는 경우)
       if (!text.trim()) {
         return { RESULT_CODE: '0000', RESULT_MSG: 'OK (empty response)' }
       }
@@ -654,6 +654,7 @@ export class LGUplusClient implements ILGUplusClient {
 
     const rawFiles = (data.ITEMS ?? data.FILE_LIST ?? []) as Array<{
       ITEM_ID: number
+      ITEM_SRC_NO?: number
       ITEM_NAME: string
       ITEM_SIZE: number
       ITEM_EXTENSION: string
@@ -666,6 +667,7 @@ export class LGUplusClient implements ILGUplusClient {
 
     const items: LGUplusFileItem[] = rawFiles.map((f) => ({
       itemId: f.ITEM_ID,
+      itemSrcNo: f.ITEM_SRC_NO,
       itemName: f.ITEM_NAME,
       itemSize: f.ITEM_SIZE ?? 0,
       itemExtension: f.ITEM_EXTENSION,
@@ -688,6 +690,10 @@ export class LGUplusClient implements ILGUplusClient {
     const firstPage = await this.getFileList(folderId, { page: 1 })
     const allFiles = [...firstPage.items]
     const total = firstPage.total
+    // pageSize 결정: 첫 페이지 아이템 수를 기준으로 하되, 필터링으로 줄어든 경우를 보정
+    // "상위 폴더 이동" 필터링으로 items.length가 실제 페이지 크기보다 1 적을 수 있음
+    // items.length < total이면 아직 더 가져올 페이지가 있으므로 items.length가 pageSize
+    // items.length >= total이면 모든 항목이 첫 페이지에 있으므로 조기 종료됨
     const pageSize = firstPage.items.length || 20
 
     onProgress?.(1, allFiles.length, total)
@@ -860,16 +866,22 @@ export class LGUplusClient implements ILGUplusClient {
     Array.from({ length: concurrency }, () => processNext())
     await allDone
 
-    // 실패한 폴더 재시도
-    if (failedEntries.length > 0) {
-      this.logger.info(`Retrying ${failedEntries.length} failed folder(s)`, { folderId })
-      isRetryPhase = true
+    // 실패한 폴더 재시도 (최대 2회)
+    const MAX_FOLDER_RETRIES = 2
+    for (let retryRound = 0; retryRound < MAX_FOLDER_RETRIES && failedEntries.length > 0; retryRound++) {
+      const retryDelay = 500 * Math.pow(2, retryRound) // 500ms, 1s
+      this.logger.info(`Retrying ${failedEntries.length} failed folder(s), round ${retryRound + 1}/${MAX_FOLDER_RETRIES}`, { folderId, retryDelay })
+      await new Promise((r) => setTimeout(r, retryDelay))
 
-      for (const entry of failedEntries) {
+      isRetryPhase = retryRound === MAX_FOLDER_RETRIES - 1 // 마지막 라운드만 permanently skipping 로그
+
+      const entriesToRetry = [...failedEntries]
+      failedEntries.length = 0
+
+      for (const entry of entriesToRetry) {
         visitedFolderIds.delete(entry.folderId)
         enqueue(entry)
       }
-      failedEntries.length = 0
 
       const retryDone = new Promise<void>((r) => {
         resolveAll = r
@@ -913,7 +925,7 @@ export class LGUplusClient implements ILGUplusClient {
 
       const text = await this.decodeResponse(res)
       const data = JSON.parse(text) as {
-        file: {
+        file?: {
           fileManagementNumber: number
           fileName: string
           fileSize: number
@@ -927,6 +939,14 @@ export class LGUplusClient implements ILGUplusClient {
         certificationKey?: string
       }
 
+      if (!data.file) {
+        this.logger.warn('getDownloadUrlInfo: data.file is undefined', {
+          fileId,
+          responseKeys: Object.keys(data),
+        })
+        return null
+      }
+
       return {
         url: data.url || 'https://whfile1.webhard.co.kr/file/download',
         session: data.session,
@@ -936,7 +956,11 @@ export class LGUplusClient implements ILGUplusClient {
         fileName: data.file.fileName,
         fileSize: data.file.fileSize,
       }
-    } catch {
+    } catch (error) {
+      this.logger.warn('getDownloadUrlInfo failed', {
+        fileId,
+        error: (error as Error).message,
+      })
       return null
     }
   }
@@ -974,11 +998,21 @@ export class LGUplusClient implements ILGUplusClient {
 
     const downloadUrl = `${info.url}?${dlParams.toString()}`
     const res = await fetch(downloadUrl, {
+      redirect: 'manual',
       headers: {
         ...this.getCommonHeaders(),
         Referer: `${this.baseUrl}/`,
       },
     })
+
+    // 3xx redirect = 세션 만료 (로그인 페이지로 리다이렉트)
+    if (res.status >= 300 && res.status < 400) {
+      this.emitEvent('session-expired', { reason: `Download redirect ${res.status}` })
+      throw new AuthSessionExpiredError(
+        `Download redirect to login (${res.status})`,
+        { url: downloadUrl },
+      )
+    }
 
     if (res.status === 404) {
       throw new FileDownloadNotFoundError(`File ${fileId} not found on server`, { fileId })

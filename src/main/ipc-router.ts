@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain, shell } from 'electron'
 import { writeFile, mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { CoreServices } from '../core/container'
@@ -888,15 +889,21 @@ export function registerIpcHandlers(services: CoreServices): void {
           const existing = state.getFileByLguplusFileId(String(file.itemId))
           if (existing && !request.forceRescan) {
             if (existing.status === 'downloaded' || existing.status === 'completed') {
-              downloadedFiles++
-              results.push({
-                fileId: existing.id,
-                fileName: file.itemName,
-                success: true,
-                downloadPath: existing.download_path ?? undefined,
-                fileSize: file.itemSize,
-              })
-              continue
+              // 디스크에 실제 파일이 존재하는지 검증
+              const diskExists = existing.download_path && existsSync(existing.download_path)
+              if (diskExists) {
+                downloadedFiles++
+                results.push({
+                  fileId: existing.id,
+                  fileName: file.itemName,
+                  success: true,
+                  downloadPath: existing.download_path ?? undefined,
+                  fileSize: file.itemSize,
+                })
+                continue
+              }
+              // 파일이 디스크에 없으면 DB 상태를 리셋하여 재다운로드
+              state.updateFileStatus(existing.id, 'detected')
             }
           }
 

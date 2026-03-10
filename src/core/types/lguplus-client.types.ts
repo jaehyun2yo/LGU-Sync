@@ -16,6 +16,7 @@ export interface LGUplusFolderItem {
 
 export interface LGUplusFileItem {
   itemId: number
+  itemSrcNo?: number
   itemName: string
   itemSize: number
   itemExtension: string
