@@ -25,7 +25,7 @@ export interface DetectedFile {
   fileSize: number
   historyNo?: number
   folderId: string
-  /** 변동 유형. snapshot 전략에서는 'UP'으로 추론 */
+  /** 변동 유형 */
   operCode: OperCode
 }
 
@@ -49,6 +49,14 @@ export interface EventMap {
     durationMs: number
   }
   'detection:found': { files: DetectedFile[]; strategy: DetectionStrategy }
+  'opercode:event': {
+    operCode: OperCode
+    fileName: string
+    filePath: string
+    folderId: string
+    historyNo?: number
+    timestamp: string
+  }
   'session:expired': { reason: string }
   'session:renewed': { method: 'http' | 'playwright' }
   'engine:status': { prev: EngineStatus; next: EngineStatus }

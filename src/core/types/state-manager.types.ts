@@ -16,6 +16,8 @@ import type {
   EventQuery,
   LogQuery,
   QueryOptions,
+  FolderChangeRow,
+  FolderChangeInsert,
 } from '../db/types'
 import type { SyncFileStatus } from './sync-status.types'
 
@@ -55,6 +57,11 @@ export interface IStateManager {
   getLogs(query: LogQuery): LogRow[]
   getLogCount(query: Omit<LogQuery, 'limit' | 'offset'>): number
   addLog(entry: LogInsert): void
+
+  // Folder changes
+  saveFolderChange(change: FolderChangeInsert): number
+  getFolderChanges(options?: { status?: string; limit?: number }): FolderChangeRow[]
+  updateFolderChange(id: number, data: { status: string; processed_at?: string }): void
 
   // Lifecycle
   initialize(): void

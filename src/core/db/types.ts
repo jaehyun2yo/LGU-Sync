@@ -72,6 +72,7 @@ export interface SyncFileRow {
   file_extension: string | null
   lguplus_file_id: string | null
   lguplus_updated_at: string | null
+  oper_code: string | null
   status: SyncFileStatus
   download_path: string | null
   self_webhard_file_id: string | null
@@ -96,6 +97,7 @@ export interface SyncFileInsert {
   file_extension?: string | null
   lguplus_file_id?: string | null
   lguplus_updated_at?: string | null
+  oper_code?: string | null
   detected_at: string
 }
 
@@ -108,6 +110,7 @@ export const SyncFileInsertSchema = z.object({
   file_extension: z.string().nullable().optional(),
   lguplus_file_id: z.string().nullable().optional(),
   lguplus_updated_at: z.string().nullable().optional(),
+  oper_code: z.string().nullable().optional(),
   detected_at: z.string(),
 })
 
@@ -124,6 +127,7 @@ export interface SyncEventRow {
   file_name: string | null
   file_path: string | null
   file_size: number | null
+  oper_code: string | null
   status: SyncEventStatus
   result: SyncEventResult | null
   error_message: string | null
@@ -144,6 +148,7 @@ export interface SyncEventInsert {
   file_name?: string | null
   file_path?: string | null
   file_size?: number | null
+  oper_code?: string | null
   detected_at: string
   metadata?: string | null
 }
@@ -340,4 +345,28 @@ export interface LogQuery {
   to?: string
   limit?: number
   offset?: number
+}
+
+// ── folder_changes ──
+
+export interface FolderChangeRow {
+  id: number
+  lguplus_folder_id: string
+  oper_code: string
+  old_path: string | null
+  new_path: string | null
+  affected_items: number
+  status: string
+  metadata: string | null
+  created_at: string
+  processed_at: string | null
+}
+
+export interface FolderChangeInsert {
+  lguplus_folder_id: string
+  oper_code: string
+  old_path?: string | null
+  new_path?: string | null
+  affected_items?: number
+  metadata?: string | null
 }

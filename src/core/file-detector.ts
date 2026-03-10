@@ -3,7 +3,6 @@ import type { ILGUplusClient, UploadHistoryItem } from './types/lguplus-client.t
 import type { IStateManager } from './types/state-manager.types'
 import type { IEventBus, DetectedFile, DetectionStrategy, OperCode } from './types/events.types'
 import type { ILogger } from './types/logger.types'
-import { diffSnapshot } from './snapshot-diff'
 
 /** DN(다운로드)은 본인 다운로드 기록이므로 감지에서 제외 */
 const EXCLUDED_OPER_CODES = new Set<string>(['DN'])
@@ -25,7 +24,6 @@ type DetectionHandler = (files: DetectedFile[], strategy: DetectionStrategy) => 
 
 export interface FileDetectorOptions {
   pollingIntervalMs?: number
-  strategy?: 'polling' | 'snapshot'
 }
 
 export class FileDetector implements IFileDetector {
@@ -35,7 +33,6 @@ export class FileDetector implements IFileDetector {
   private logger: ILogger
   private pollingIntervalMs: number
   private originalIntervalMs: number
-  private strategy: 'polling' | 'snapshot'
   private pollingTimer: ReturnType<typeof setInterval> | null = null
   private handlers: DetectionHandler[] = []
   private consecutiveFailures = 0
@@ -53,7 +50,6 @@ export class FileDetector implements IFileDetector {
     this.logger = logger.child({ module: 'file-detector' })
     this.pollingIntervalMs = options?.pollingIntervalMs ?? 5000
     this.originalIntervalMs = this.pollingIntervalMs
-    this.strategy = options?.strategy ?? 'polling'
   }
 
   start(): void {
@@ -61,16 +57,12 @@ export class FileDetector implements IFileDetector {
 
     this.logger.info('Starting file detector', {
       intervalMs: this.pollingIntervalMs,
-      strategy: this.strategy,
     })
 
-    const pollFn =
-      this.strategy === 'snapshot' ? () => this.pollBySnapshot() : () => this.pollForFiles()
-
     // Initial poll
-    pollFn()
+    this.pollForFiles()
 
-    this.pollingTimer = setInterval(pollFn, this.pollingIntervalMs)
+    this.pollingTimer = setInterval(() => this.pollForFiles(), this.pollingIntervalMs)
   }
 
   stop(): void {
@@ -91,7 +83,7 @@ export class FileDetector implements IFileDetector {
   }
 
   async forceCheck(): Promise<DetectedFile[]> {
-    return this.strategy === 'snapshot' ? this.pollBySnapshot() : this.pollForFiles()
+    return this.pollForFiles()
   }
 
   onFilesDetected(handler: DetectionHandler): () => void {
@@ -104,76 +96,23 @@ export class FileDetector implements IFileDetector {
     }
   }
 
-  private async pollBySnapshot(): Promise<DetectedFile[]> {
-    try {
-      const folders = this.state.getFolders(true)
-      const allDetected: DetectedFile[] = []
-
-      // 폴더를 배치 단위로 병렬 스캔 (concurrency 3)
-      const SNAPSHOT_CONCURRENCY = 3
-      for (let i = 0; i < folders.length; i += SNAPSHOT_CONCURRENCY) {
-        const batch = folders.slice(i, i + SNAPSHOT_CONCURRENCY)
-        const results = await Promise.allSettled(
-          batch.map((folder) => this.scanSingleFolder(folder)),
-        )
-
-        for (const result of results) {
-          if (result.status === 'fulfilled') {
-            allDetected.push(...result.value)
-          }
-        }
-      }
-
-      if (allDetected.length > 0) {
-        this.notifyDetection(allDetected, 'snapshot')
-        this.logger.info(`Snapshot detected ${allDetected.length} changes`, {
-          count: allDetected.length,
-        })
-      }
-
-      this.onPollSuccess()
-      return allDetected
-    } catch (error) {
-      this.onPollFailure(error as Error)
-      return []
-    }
-  }
-
-  private async scanSingleFolder(
-    folder: { id: string; lguplus_folder_id: string },
-  ): Promise<DetectedFile[]> {
-    const folderId = Number(folder.lguplus_folder_id)
-    const { items } = await this.client.getFileList(folderId)
-
-    const existingFiles = this.state.getFilesByFolder(folder.id)
-    const knownFileIds = new Set(
-      existingFiles
-        .map((f) => Number(f.lguplus_file_id))
-        .filter((id) => !isNaN(id)),
-    )
-
-    const diff = diffSnapshot(items, knownFileIds, folder.lguplus_folder_id)
-    const detected: DetectedFile[] = [...diff.newFiles]
-
-    if (diff.deletedFileIds.length > 0) {
-      for (const itemId of diff.deletedFileIds) {
-        detected.push({
-          fileName: `deleted-${itemId}`,
-          filePath: '',
-          fileSize: 0,
-          folderId: folder.lguplus_folder_id,
-          operCode: 'D' as OperCode,
-        })
-      }
-    }
-
-    return detected
-  }
-
   private async pollForFiles(): Promise<DetectedFile[]> {
     try {
       const lastHistoryNo = this.state.getCheckpoint('last_history_no')
-      const lastNo = lastHistoryNo ? parseInt(lastHistoryNo, 10) : 0
+
+      // Baseline: 첫 실행 → 현재 max historyNo 저장 후 감지 건너뜀
+      if (lastHistoryNo === null) {
+        const firstPage = await this.client.getUploadHistory({ operCode: '', page: 1 })
+        const maxNo = firstPage.items.length > 0
+          ? Math.max(...firstPage.items.map((i) => i.historyNo))
+          : 0
+        this.state.saveCheckpoint('last_history_no', String(maxNo))
+        this.logger.info('Polling baseline established', { maxHistoryNo: maxNo })
+        this.onPollSuccess()
+        return []
+      }
+
+      const lastNo = parseInt(lastHistoryNo, 10)
 
       // 다중 페이지 조회: 첫 페이지로 total/pageSize 파악 후 남은 페이지 순차 조회
       const allHistoryItems: UploadHistoryItem[] = []

@@ -209,8 +209,30 @@ CREATE TABLE IF NOT EXISTS daily_stats (
 );
 `
 
+export const CREATE_FOLDER_CHANGES = `
+CREATE TABLE IF NOT EXISTS folder_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lguplus_folder_id TEXT NOT NULL,
+    oper_code TEXT NOT NULL,
+    old_path TEXT,
+    new_path TEXT,
+    affected_items INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'detected',
+    metadata TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    processed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_fc_folder ON folder_changes(lguplus_folder_id);
+CREATE INDEX IF NOT EXISTS idx_fc_status ON folder_changes(status);
+CREATE INDEX IF NOT EXISTS idx_fc_created ON folder_changes(created_at);
+`
+
 export const MIGRATIONS = [
   `ALTER TABLE sync_files ADD COLUMN lguplus_updated_at TEXT;`,
+  // Add oper_code column to sync_files
+  `ALTER TABLE sync_files ADD COLUMN oper_code TEXT DEFAULT 'UP';`,
+  // Add oper_code column to sync_events
+  `ALTER TABLE sync_events ADD COLUMN oper_code TEXT;`,
 ]
 
 /** All table creation statements in dependency order */
@@ -225,4 +247,5 @@ export const ALL_CREATE_STATEMENTS = [
   CREATE_FILE_SNAPSHOTS,
   CREATE_APP_LOGS,
   CREATE_DAILY_STATS,
+  CREATE_FOLDER_CHANGES,
 ]

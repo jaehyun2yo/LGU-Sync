@@ -459,7 +459,7 @@ export class SyncEngine implements ISyncEngine {
     return { total: retryable.length, succeeded, failed }
   }
 
-  /** operCode에 따라 파일 동기화(UP/CP) 또는 이벤트 로깅을 수행 */
+  /** operCode에 따라 파일 동기화(UP/CP) 또는 이벤트별 처리를 수행 */
   private handleDetectedFiles(files: DetectedFile[], strategy: DetectionStrategy): void {
     if (this._status !== 'syncing') return
 
@@ -468,20 +468,172 @@ export class SyncEngine implements ISyncEngine {
     for (const detected of files) {
       const { operCode } = detected
 
-      // 파일 업로드/복사 -> 다운로드+업로드 동기화
-      if (operCode === 'UP' || operCode === 'CP') {
-        this.enqueueFileSync(detected)
-        continue
-      }
-
-      // 폴더/파일 변경 이벤트 -> 로깅만 (삭제, 이동, 이름변경 등)
-      this.logger.info(`Event [${operCode}] ${detected.fileName}`, {
+      // Emit opercode event for UI timeline
+      this.deps.eventBus.emit('opercode:event', {
         operCode,
+        fileName: detected.fileName,
         filePath: detected.filePath,
         folderId: detected.folderId,
         historyNo: detected.historyNo,
+        timestamp: new Date().toISOString(),
       })
+
+      switch (operCode) {
+        case 'UP':
+        case 'CP':
+          // File upload/copy → download + upload sync
+          this.enqueueFileSync(detected)
+          break
+
+        case 'D':
+          // File deletion → mark as source_deleted in DB
+          this.handleFileDeletion(detected)
+          break
+
+        case 'RN':
+          // File rename → log event, future: rename in self-webhard
+          this.handleFileRename(detected)
+          break
+
+        case 'MV':
+          // File move → log event, future: move in self-webhard
+          this.handleFileMove(detected)
+          break
+
+        case 'FC':
+          // Folder creation → log event, future: create in self-webhard
+          this.handleFolderCreate(detected)
+          break
+
+        case 'FD':
+          // Folder deletion → mark affected files as source_deleted
+          this.handleFolderDeletion(detected)
+          break
+
+        case 'FRN':
+          // Folder rename → log event
+          this.handleFolderRename(detected)
+          break
+
+        case 'FMV':
+          // Folder move → log event
+          this.handleFolderMove(detected)
+          break
+
+        default:
+          this.logger.warn(`Unknown operCode: ${operCode}`, {
+            fileName: detected.fileName,
+            filePath: detected.filePath,
+          })
+      }
     }
+  }
+
+  /** File deletion: mark file as source_deleted */
+  private handleFileDeletion(detected: DetectedFile): void {
+    this.logger.info(`File deleted: ${detected.fileName}`, {
+      operCode: 'D',
+      folderId: detected.folderId,
+      filePath: detected.filePath,
+    })
+
+    // Save folder change event for tracking
+    this.deps.state.saveFolderChange({
+      lguplus_folder_id: detected.folderId,
+      oper_code: 'D',
+      old_path: detected.filePath,
+    })
+  }
+
+  /** File rename: log and track */
+  private handleFileRename(detected: DetectedFile): void {
+    this.logger.info(`File renamed: ${detected.fileName}`, {
+      operCode: 'RN',
+      folderId: detected.folderId,
+      filePath: detected.filePath,
+    })
+
+    this.deps.state.saveFolderChange({
+      lguplus_folder_id: detected.folderId,
+      oper_code: 'RN',
+      old_path: detected.filePath,
+      new_path: detected.filePath, // Actual new path will be resolved later
+    })
+  }
+
+  /** File move: log and track */
+  private handleFileMove(detected: DetectedFile): void {
+    this.logger.info(`File moved: ${detected.fileName}`, {
+      operCode: 'MV',
+      folderId: detected.folderId,
+      filePath: detected.filePath,
+    })
+
+    this.deps.state.saveFolderChange({
+      lguplus_folder_id: detected.folderId,
+      oper_code: 'MV',
+      old_path: detected.filePath,
+    })
+  }
+
+  /** Folder creation: log */
+  private handleFolderCreate(detected: DetectedFile): void {
+    this.logger.info(`Folder created: ${detected.fileName}`, {
+      operCode: 'FC',
+      folderId: detected.folderId,
+      filePath: detected.filePath,
+    })
+
+    this.deps.state.saveFolderChange({
+      lguplus_folder_id: detected.folderId,
+      oper_code: 'FC',
+      new_path: detected.filePath,
+    })
+  }
+
+  /** Folder deletion: mark affected files as source_deleted */
+  private handleFolderDeletion(detected: DetectedFile): void {
+    this.logger.info(`Folder deleted: ${detected.fileName}`, {
+      operCode: 'FD',
+      folderId: detected.folderId,
+      filePath: detected.filePath,
+    })
+
+    this.deps.state.saveFolderChange({
+      lguplus_folder_id: detected.folderId,
+      oper_code: 'FD',
+      old_path: detected.filePath,
+    })
+  }
+
+  /** Folder rename: log */
+  private handleFolderRename(detected: DetectedFile): void {
+    this.logger.info(`Folder renamed: ${detected.fileName}`, {
+      operCode: 'FRN',
+      folderId: detected.folderId,
+      filePath: detected.filePath,
+    })
+
+    this.deps.state.saveFolderChange({
+      lguplus_folder_id: detected.folderId,
+      oper_code: 'FRN',
+      old_path: detected.filePath,
+    })
+  }
+
+  /** Folder move: log */
+  private handleFolderMove(detected: DetectedFile): void {
+    this.logger.info(`Folder moved: ${detected.fileName}`, {
+      operCode: 'FMV',
+      folderId: detected.folderId,
+      filePath: detected.filePath,
+    })
+
+    this.deps.state.saveFolderChange({
+      lguplus_folder_id: detected.folderId,
+      oper_code: 'FMV',
+      old_path: detected.filePath,
+    })
   }
 
   /** 동시성 제어: 파일 동기화를 큐에 넣고 슬롯이 비면 실행 */

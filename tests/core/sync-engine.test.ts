@@ -106,6 +106,9 @@ function mockStateManager(): IStateManager {
     incrementDailyStats: vi.fn(),
     getLogs: vi.fn().mockReturnValue([]),
     addLog: vi.fn(),
+    saveFolderChange: vi.fn().mockReturnValue(1),
+    getFolderChanges: vi.fn().mockReturnValue([]),
+    updateFolderChange: vi.fn(),
     initialize: vi.fn(),
     close: vi.fn(),
   }
@@ -599,6 +602,147 @@ describe('SyncEngine', () => {
       const result = await engine.retryAllDlq()
       expect(result.succeeded).toBe(1)
       expect(state.removeDlqItem).toHaveBeenCalledWith(1)
+    })
+  })
+
+  // ── operCode 라우팅 ──
+
+  describe('operCode routing', () => {
+    beforeEach(async () => {
+      await engine.start()
+      ;(state.getFolderByLguplusId as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트',
+      })
+    })
+
+    it('UP operCode는 saveFile을 호출하여 파일 동기화를 시작한다', async () => {
+      const upFile: DetectedFile = {
+        fileName: 'upload.dxf', filePath: '/upload.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'UP', historyNo: 301,
+      }
+
+      detector._handlers[0]([upFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).toHaveBeenCalledTimes(1)
+      expect((state.saveFile as ReturnType<typeof vi.fn>).mock.calls[0][0].file_name).toBe('upload.dxf')
+    })
+
+    it('CP operCode는 saveFile을 호출하여 파일 동기화를 시작한다', async () => {
+      const cpFile: DetectedFile = {
+        fileName: 'copied.dxf', filePath: '/copied.dxf', fileSize: 512,
+        folderId: '1001', operCode: 'CP', historyNo: 302,
+      }
+
+      detector._handlers[0]([cpFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).toHaveBeenCalledTimes(1)
+      expect((state.saveFile as ReturnType<typeof vi.fn>).mock.calls[0][0].file_name).toBe('copied.dxf')
+    })
+
+    it('D operCode는 saveFolderChange를 oper_code: D로 호출한다', async () => {
+      const dFile: DetectedFile = {
+        fileName: 'deleted.dxf', filePath: '/올리기전용/deleted.dxf', fileSize: 0,
+        folderId: '1001', operCode: 'D', historyNo: 303,
+      }
+
+      detector._handlers[0]([dFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      // D는 파일 동기화가 아닌 saveFolderChange를 호출
+      expect(state.saveFile).not.toHaveBeenCalled()
+      expect(state.saveFolderChange).toHaveBeenCalledWith(
+        expect.objectContaining({ oper_code: 'D', lguplus_folder_id: '1001' }),
+      )
+    })
+
+    it('MV operCode는 saveFolderChange를 oper_code: MV로 호출한다', async () => {
+      const mvFile: DetectedFile = {
+        fileName: 'moved.dxf', filePath: '/올리기전용/moved.dxf', fileSize: 0,
+        folderId: '1001', operCode: 'MV', historyNo: 304,
+      }
+
+      detector._handlers[0]([mvFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).not.toHaveBeenCalled()
+      expect(state.saveFolderChange).toHaveBeenCalledWith(
+        expect.objectContaining({ oper_code: 'MV' }),
+      )
+    })
+
+    it('RN operCode는 saveFolderChange를 oper_code: RN으로 호출한다', async () => {
+      const rnFile: DetectedFile = {
+        fileName: 'renamed.dxf', filePath: '/올리기전용/renamed.dxf', fileSize: 0,
+        folderId: '1001', operCode: 'RN', historyNo: 305,
+      }
+
+      detector._handlers[0]([rnFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).not.toHaveBeenCalled()
+      expect(state.saveFolderChange).toHaveBeenCalledWith(
+        expect.objectContaining({ oper_code: 'RN' }),
+      )
+    })
+
+    it('폴더 operCode(FC, FD, FRN, FMV)는 각각 saveFolderChange를 호출한다', async () => {
+      const folderOps: DetectedFile[] = [
+        { fileName: '새폴더', filePath: '/올리기전용/새폴더', fileSize: 0, folderId: '1001', operCode: 'FC', historyNo: 401 },
+        { fileName: '삭제폴더', filePath: '/올리기전용/삭제폴더', fileSize: 0, folderId: '1001', operCode: 'FD', historyNo: 402 },
+        { fileName: '이름변경폴더', filePath: '/올리기전용/이름변경폴더', fileSize: 0, folderId: '1001', operCode: 'FRN', historyNo: 403 },
+        { fileName: '이동폴더', filePath: '/올리기전용/이동폴더', fileSize: 0, folderId: '1001', operCode: 'FMV', historyNo: 404 },
+      ]
+
+      detector._handlers[0](folderOps, 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      // 폴더 operCode는 saveFile이 아닌 saveFolderChange를 호출
+      expect(state.saveFile).not.toHaveBeenCalled()
+      expect(state.saveFolderChange).toHaveBeenCalledTimes(4)
+
+      const calls = (state.saveFolderChange as ReturnType<typeof vi.fn>).mock.calls
+      expect(calls[0][0].oper_code).toBe('FC')
+      expect(calls[1][0].oper_code).toBe('FD')
+      expect(calls[2][0].oper_code).toBe('FRN')
+      expect(calls[3][0].oper_code).toBe('FMV')
+    })
+
+    it('혼합 operCode에서 UP/CP만 동기화하고 나머지는 saveFolderChange를 호출한다', async () => {
+      const mixed: DetectedFile[] = [
+        { fileName: 'upload.dxf', filePath: '/upload.dxf', fileSize: 1024, folderId: '1001', operCode: 'UP', historyNo: 501 },
+        { fileName: 'deleted.dxf', filePath: '/deleted.dxf', fileSize: 0, folderId: '1001', operCode: 'D', historyNo: 502 },
+        { fileName: 'copied.dxf', filePath: '/copied.dxf', fileSize: 512, folderId: '1001', operCode: 'CP', historyNo: 503 },
+        { fileName: '새폴더', filePath: '/새폴더', fileSize: 0, folderId: '1001', operCode: 'FC', historyNo: 504 },
+      ]
+
+      detector._handlers[0](mixed, 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      // UP + CP → saveFile 2회
+      expect(state.saveFile).toHaveBeenCalledTimes(2)
+      // D + FC → saveFolderChange 2회
+      expect(state.saveFolderChange).toHaveBeenCalledTimes(2)
+    })
+
+    it('opercode:event 이벤트가 모든 operCode에 대해 발행된다', async () => {
+      const handler = vi.fn()
+      eventBus.on('opercode:event', handler)
+
+      const files: DetectedFile[] = [
+        { fileName: 'f1.dxf', filePath: '/f1.dxf', fileSize: 0, folderId: '1001', operCode: 'UP', historyNo: 601 },
+        { fileName: 'f2.dxf', filePath: '/f2.dxf', fileSize: 0, folderId: '1001', operCode: 'D', historyNo: 602 },
+        { fileName: '폴더', filePath: '/폴더', fileSize: 0, folderId: '1001', operCode: 'FC', historyNo: 603 },
+      ]
+
+      detector._handlers[0](files, 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(handler).toHaveBeenCalledTimes(3)
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ operCode: 'UP' }))
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ operCode: 'D' }))
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ operCode: 'FC' }))
     })
   })
 

@@ -132,6 +132,9 @@ function createMockState(): IStateManager {
     getLogs: vi.fn().mockReturnValue([]),
     getLogCount: vi.fn().mockReturnValue(0),
     addLog: vi.fn(),
+    saveFolderChange: vi.fn().mockReturnValue(1),
+    getFolderChanges: vi.fn().mockReturnValue([]),
+    updateFolderChange: vi.fn(),
     initialize: vi.fn(),
     close: vi.fn(),
   }

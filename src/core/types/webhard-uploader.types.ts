@@ -68,6 +68,16 @@ export interface IWebhardUploader {
   fileExists(folderId: string, fileName: string): Promise<boolean>
   listFiles(folderId: string): Promise<WResult<WebhardFileInfo[]>>
 
+  // File operations
+  deleteFile(fileId: string): Promise<WResult<void>>
+  moveFile(fileId: string, targetFolderId: string): Promise<WResult<void>>
+  renameFile(fileId: string, newName: string): Promise<WResult<void>>
+
+  // Folder operations
+  deleteFolder(folderId: string): Promise<WResult<void>>
+  moveFolder(folderId: string, targetParentId: string): Promise<WResult<void>>
+  renameFolder(folderId: string, newName: string): Promise<WResult<void>>
+
   // Events
   on(
     event: 'upload-completed' | 'upload-failed' | 'connection-lost',

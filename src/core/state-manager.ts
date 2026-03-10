@@ -18,6 +18,8 @@ import type {
   EventQuery,
   LogQuery,
   QueryOptions,
+  FolderChangeRow,
+  FolderChangeInsert,
 } from './db/types'
 import { PRAGMA_INIT, ALL_CREATE_STATEMENTS, MIGRATIONS } from './db/schema'
 
@@ -91,8 +93,8 @@ export class StateManager implements IStateManager {
     const id = uuid()
     this.db
       .prepare(
-        `INSERT INTO sync_files (id, folder_id, history_no, file_name, file_path, file_size, file_extension, lguplus_file_id, lguplus_updated_at, detected_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sync_files (id, folder_id, history_no, file_name, file_path, file_size, file_extension, lguplus_file_id, lguplus_updated_at, oper_code, detected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -104,6 +106,7 @@ export class StateManager implements IStateManager {
         file.file_extension ?? null,
         file.lguplus_file_id ?? null,
         file.lguplus_updated_at ?? null,
+        file.oper_code ?? null,
         file.detected_at,
       )
     return id
@@ -454,6 +457,46 @@ export class StateManager implements IStateManager {
         entry.context ?? null,
         entry.stack_trace ?? null,
       )
+  }
+
+  // ── Folder Changes ──
+
+  saveFolderChange(change: FolderChangeInsert): number {
+    const result = this.db
+      .prepare(
+        `INSERT INTO folder_changes (lguplus_folder_id, oper_code, old_path, new_path, affected_items, metadata)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        change.lguplus_folder_id,
+        change.oper_code,
+        change.old_path ?? null,
+        change.new_path ?? null,
+        change.affected_items ?? 0,
+        change.metadata ?? null,
+      )
+    return result.lastInsertRowid as number
+  }
+
+  getFolderChanges(options?: { status?: string; limit?: number }): FolderChangeRow[] {
+    let sql = 'SELECT * FROM folder_changes WHERE 1=1'
+    const params: unknown[] = []
+    if (options?.status) {
+      sql += ' AND status = ?'
+      params.push(options.status)
+    }
+    sql += ' ORDER BY created_at DESC'
+    if (options?.limit) {
+      sql += ' LIMIT ?'
+      params.push(options.limit)
+    }
+    return this.db.prepare(sql).all(...params) as FolderChangeRow[]
+  }
+
+  updateFolderChange(id: number, data: { status: string; processed_at?: string }): void {
+    this.db
+      .prepare(`UPDATE folder_changes SET status = ?, processed_at = ? WHERE id = ?`)
+      .run(data.status, data.processed_at ?? new Date().toISOString(), id)
   }
 
   // ── Private Helpers ──

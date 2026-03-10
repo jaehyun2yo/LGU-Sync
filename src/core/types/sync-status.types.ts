@@ -10,6 +10,7 @@ export type SyncFileStatus =
   | 'ul_failed'
   | 'completed'
   | 'skipped'
+  | 'source_deleted'
   | 'dlq'
 
 export type SyncSessionStatus = 'started' | 'running' | 'completed' | 'failed' | 'cancelled'

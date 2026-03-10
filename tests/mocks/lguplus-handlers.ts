@@ -11,6 +11,43 @@ export function resetMockSession(): void {
   validSession = false
 }
 
+// ── Mock history item helper ──
+
+let _historyCounter = 100
+
+/** 테스트에서 다양한 operCode의 히스토리 항목을 손쉽게 생성하는 헬퍼 */
+export function createMockHistoryItem(
+  overrides: Partial<{
+    HISTORY_NO: number
+    ITEM_SRC_NO: number
+    ITEM_FOLDER_ID: number
+    ITEM_SRC_NAME: string
+    ITEM_SRC_EXTENSION: string
+    ITEM_SRC_TYPE: string
+    ITEM_FOLDER_FULLPATH: string
+    ITEM_OPER_CODE: string
+    ITEM_USE_DATE: string
+  }> = {},
+) {
+  _historyCounter++
+  return {
+    HISTORY_NO: overrides.HISTORY_NO ?? _historyCounter,
+    ITEM_SRC_NO: overrides.ITEM_SRC_NO ?? 200,
+    ITEM_FOLDER_ID: overrides.ITEM_FOLDER_ID ?? 1001,
+    ITEM_SRC_NAME: overrides.ITEM_SRC_NAME ?? 'test-file',
+    ITEM_SRC_EXTENSION: overrides.ITEM_SRC_EXTENSION ?? 'txt',
+    ITEM_SRC_TYPE: overrides.ITEM_SRC_TYPE ?? 'F',
+    ITEM_FOLDER_FULLPATH: overrides.ITEM_FOLDER_FULLPATH ?? '/올리기전용/',
+    ITEM_OPER_CODE: overrides.ITEM_OPER_CODE ?? 'UP',
+    ITEM_USE_DATE: overrides.ITEM_USE_DATE ?? '2025-01-15 10:30:00',
+  }
+}
+
+/** 히스토리 카운터를 초기화한다 (테스트 간 격리) */
+export function resetHistoryCounter(): void {
+  _historyCounter = 100
+}
+
 // ── Mock data ──
 
 const MOCK_FOLDERS = [
@@ -30,8 +67,9 @@ const MOCK_FILE_LIST = [
   },
 ]
 
-const MOCK_HISTORY = [
-  {
+/** 동적 히스토리 응답 — 테스트에서 setMockHistory()로 교체 가능 */
+let mockHistoryItems = [
+  createMockHistoryItem({
     HISTORY_NO: 101,
     ITEM_SRC_NO: 5001,
     ITEM_FOLDER_ID: 1001,
@@ -41,8 +79,8 @@ const MOCK_HISTORY = [
     ITEM_FOLDER_FULLPATH: '/올리기전용/원컴퍼니/',
     ITEM_OPER_CODE: 'U',
     ITEM_USE_DATE: '2026-02-23 10:00:00',
-  },
-  {
+  }),
+  createMockHistoryItem({
     HISTORY_NO: 100,
     ITEM_SRC_NO: 5002,
     ITEM_FOLDER_ID: 1001,
@@ -52,8 +90,57 @@ const MOCK_HISTORY = [
     ITEM_FOLDER_FULLPATH: '/올리기전용/대성목형/',
     ITEM_OPER_CODE: 'U',
     ITEM_USE_DATE: '2026-02-23 09:30:00',
-  },
+  }),
 ]
+
+/** 테스트에서 USE_HISTORY/LIST 응답을 동적으로 교체 */
+export function setMockHistory(items: ReturnType<typeof createMockHistoryItem>[]): void {
+  mockHistoryItems = items
+}
+
+/** 히스토리 응답을 기본값으로 복원 */
+export function resetMockHistory(): void {
+  mockHistoryItems = [
+    createMockHistoryItem({
+      HISTORY_NO: 101,
+      ITEM_SRC_NO: 5001,
+      ITEM_FOLDER_ID: 1001,
+      ITEM_SRC_NAME: 'drawing1',
+      ITEM_SRC_EXTENSION: 'dxf',
+      ITEM_SRC_TYPE: 'file',
+      ITEM_FOLDER_FULLPATH: '/올리기전용/원컴퍼니/',
+      ITEM_OPER_CODE: 'U',
+      ITEM_USE_DATE: '2026-02-23 10:00:00',
+    }),
+    createMockHistoryItem({
+      HISTORY_NO: 100,
+      ITEM_SRC_NO: 5002,
+      ITEM_FOLDER_ID: 1001,
+      ITEM_SRC_NAME: 'drawing2',
+      ITEM_SRC_EXTENSION: 'dxf',
+      ITEM_SRC_TYPE: 'file',
+      ITEM_FOLDER_FULLPATH: '/올리기전용/대성목형/',
+      ITEM_OPER_CODE: 'U',
+      ITEM_USE_DATE: '2026-02-23 09:30:00',
+    }),
+  ]
+}
+
+/** 모든 operCode를 포함하는 혼합 히스토리 세트를 생성 */
+export function createAllOperCodeHistory(): ReturnType<typeof createMockHistoryItem>[] {
+  return [
+    createMockHistoryItem({ HISTORY_NO: 201, ITEM_SRC_NAME: 'uploaded-file', ITEM_SRC_EXTENSION: 'dxf', ITEM_OPER_CODE: 'UP', ITEM_SRC_TYPE: 'file' }),
+    createMockHistoryItem({ HISTORY_NO: 202, ITEM_SRC_NAME: 'deleted-file', ITEM_SRC_EXTENSION: 'dxf', ITEM_OPER_CODE: 'D', ITEM_SRC_TYPE: 'file' }),
+    createMockHistoryItem({ HISTORY_NO: 203, ITEM_SRC_NAME: 'moved-file', ITEM_SRC_EXTENSION: 'dxf', ITEM_OPER_CODE: 'MV', ITEM_SRC_TYPE: 'file' }),
+    createMockHistoryItem({ HISTORY_NO: 204, ITEM_SRC_NAME: 'renamed-file', ITEM_SRC_EXTENSION: 'dxf', ITEM_OPER_CODE: 'RN', ITEM_SRC_TYPE: 'file' }),
+    createMockHistoryItem({ HISTORY_NO: 205, ITEM_SRC_NAME: 'copied-file', ITEM_SRC_EXTENSION: 'dxf', ITEM_OPER_CODE: 'CP', ITEM_SRC_TYPE: 'file' }),
+    createMockHistoryItem({ HISTORY_NO: 206, ITEM_SRC_NAME: '새폴더', ITEM_SRC_EXTENSION: '', ITEM_OPER_CODE: 'FC', ITEM_SRC_TYPE: 'folder' }),
+    createMockHistoryItem({ HISTORY_NO: 207, ITEM_SRC_NAME: '삭제폴더', ITEM_SRC_EXTENSION: '', ITEM_OPER_CODE: 'FD', ITEM_SRC_TYPE: 'folder' }),
+    createMockHistoryItem({ HISTORY_NO: 208, ITEM_SRC_NAME: '이동폴더', ITEM_SRC_EXTENSION: '', ITEM_OPER_CODE: 'FMV', ITEM_SRC_TYPE: 'folder' }),
+    createMockHistoryItem({ HISTORY_NO: 209, ITEM_SRC_NAME: '이름변경폴더', ITEM_SRC_EXTENSION: '', ITEM_OPER_CODE: 'FRN', ITEM_SRC_TYPE: 'folder' }),
+    createMockHistoryItem({ HISTORY_NO: 210, ITEM_SRC_NAME: 'downloaded-file', ITEM_SRC_EXTENSION: 'dxf', ITEM_OPER_CODE: 'DN', ITEM_SRC_TYPE: 'file' }),
+  ]
+}
 
 // ── Helper ──
 
@@ -183,14 +270,14 @@ export const lguplusHandlers = [
       })
     }
 
-    // USE_HISTORY / LIST — upload history
+    // USE_HISTORY / LIST — upload history (dynamic)
     if (msgType === 'USE_HISTORY' && procType === 'LIST') {
       return HttpResponse.json({
         RESULT_CODE: '0000',
         RESULT_MSG: 'OK',
-        ITEM_TOTAL: 2,
+        ITEM_TOTAL: mockHistoryItems.length,
         ITEM_VIEW: 20,
-        ITEM_HISTORY: MOCK_HISTORY,
+        ITEM_HISTORY: mockHistoryItems,
       })
     }
 
