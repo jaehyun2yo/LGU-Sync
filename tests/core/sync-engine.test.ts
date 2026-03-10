@@ -748,6 +748,31 @@ describe('SyncEngine', () => {
 
   // ── emitSyncFailed ──
 
+  describe('downloadOnly 에러 메시지', () => {
+    it('다운로드 실패 시 last_error에 구체적 에러 메시지가 저장된다', async () => {
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', folder_id: 'folder1', file_name: 'test.dxf', file_path: '/test.dxf',
+        file_size: 1024, status: 'detected', lguplus_file_id: '5001', retry_count: 0,
+      })
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {})
+
+      const specificError = new Error("Circuit breaker is OPEN for 'lguplus-download'")
+      ;(retry.execute as ReturnType<typeof vi.fn>).mockRejectedValueOnce(specificError)
+
+      const result = await engine.downloadOnly('f1')
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Circuit breaker is OPEN')
+      expect(state.updateFileStatus).toHaveBeenCalledWith(
+        'f1',
+        'dl_failed',
+        expect.objectContaining({
+          last_error: expect.stringContaining('Circuit breaker is OPEN'),
+        }),
+      )
+    })
+  })
+
   describe('sync:failed 이벤트', () => {
     it('다운로드 실패 시 sync:failed 이벤트가 발행된다', async () => {
       const handler = vi.fn()

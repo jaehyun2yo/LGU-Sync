@@ -282,11 +282,10 @@ export class SyncEngine implements ISyncEngine {
       )
 
       if (!downloadResult.success) {
-        this.deps.state.updateFileStatus(fileId, 'dl_failed', {
-          last_error: 'Download failed',
-        })
-        this.emitSyncFailed('Download failed', fileId)
-        return { success: false, fileId, error: 'Download failed' }
+        const errMsg = `Download returned empty result for file ${file.lguplus_file_id}`
+        this.deps.state.updateFileStatus(fileId, 'dl_failed', { last_error: errMsg })
+        this.emitSyncFailed(errMsg, fileId)
+        return { success: false, fileId, error: errMsg }
       }
 
       this.deps.state.updateFileStatus(fileId, 'downloaded', {
