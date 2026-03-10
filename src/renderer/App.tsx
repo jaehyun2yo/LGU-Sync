@@ -4,6 +4,7 @@ import { useUiStore, type PageId } from './stores/ui-store'
 import { useSyncStore } from './stores/sync-store'
 import { useNotificationStore } from './stores/notification-store'
 import { useIpcEvent } from './hooks/useIpcEvent'
+import { useNotificationManager } from './lib/notification-manager'
 
 // Lazy page components
 import { DashboardPage } from './pages/DashboardPage'
@@ -54,6 +55,9 @@ function App() {
   const { fetchStatus, handleProgress, handleFileCompleted, handleFileFailed, handleStatusChanged } =
     useSyncStore()
   const { fetchNotifications } = useNotificationStore()
+
+  // Notification orchestrator
+  useNotificationManager()
 
   // Fetch initial data
   useEffect(() => {
