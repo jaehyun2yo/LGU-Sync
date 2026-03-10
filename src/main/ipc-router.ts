@@ -885,12 +885,23 @@ export function registerIpcHandlers(services: CoreServices): void {
           })
 
           // All folders are now DB-registered (auto-registered above if needed)
-          const existing = state.getFileByHistoryNo(file.itemId)
-          if (existing && existing.status === 'completed' && !request.forceRescan) {
-            continue
+          const existing = state.getFileByLguplusFileId(String(file.itemId))
+          if (existing && !request.forceRescan) {
+            if (existing.status === 'downloaded' || existing.status === 'completed') {
+              downloadedFiles++
+              results.push({
+                fileId: existing.id,
+                fileName: file.itemName,
+                success: true,
+                downloadPath: existing.download_path ?? undefined,
+                fileSize: file.itemSize,
+              })
+              continue
+            }
           }
 
-          const fileId = state.saveFile({
+          // Reuse existing DB record if present (avoid duplicates), otherwise create new
+          const fileId = existing?.id ?? state.saveFile({
             folder_id: folder.dbFolderId!,
             file_name: file.itemName,
             file_path: `/${folder.folderName}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
@@ -1086,14 +1097,30 @@ export function registerIpcHandlers(services: CoreServices): void {
         scannedFiles += files.length
 
         for (const file of files) {
-          const existing = state.getFileByHistoryNo(file.itemId)
-          if (existing && existing.status === 'completed' && !request.forceRescan) {
-            continue
+          const existing = state.getFileByLguplusFileId(String(file.itemId))
+          if (existing && !request.forceRescan) {
+            if (existing.status === 'completed') {
+              continue
+            }
+            // Already downloaded — skip to upload
+            if (existing.status === 'downloaded') {
+              newFiles++
+              const ulResult = await engine.uploadOnly(existing.id)
+              if (ulResult.success) syncedFiles++
+              else failedFiles++
+              results.push({
+                fileId: existing.id, fileName: file.itemName,
+                downloadSuccess: true, uploadSuccess: ulResult.success,
+                error: ulResult.error,
+              })
+              continue
+            }
           }
 
           newFiles++
 
-          const fileId = state.saveFile({
+          // Reuse existing DB record if present (avoid duplicates), otherwise create new
+          const fileId = existing?.id ?? state.saveFile({
             folder_id: folder.id,
             file_name: file.itemName,
             file_path: `/${folder.lguplus_folder_name}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,

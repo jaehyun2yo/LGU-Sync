@@ -55,6 +55,7 @@ class InMemoryStateManager implements IStateManager {
   getFile(): null { return null }
   getFilesByFolder(): [] { return [] }
   getFileByHistoryNo(): null { return null }
+  getFileByLguplusFileId(): null { return null }
   saveFolder(): string { return '' }
   updateFolder(): void { /* no-op */ }
   getFolders(): [] { return [] }

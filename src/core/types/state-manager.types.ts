@@ -32,6 +32,7 @@ export interface IStateManager {
   getFile(fileId: string): SyncFileRow | null
   getFilesByFolder(folderId: string, options?: QueryOptions): SyncFileRow[]
   getFileByHistoryNo(historyNo: number): SyncFileRow | null
+  getFileByLguplusFileId(lguplusFileId: string): SyncFileRow | null
 
   // Sync folders
   saveFolder(folder: SyncFolderInsert): string

@@ -35,6 +35,7 @@ function createMockStateManager(): Partial<IStateManager> {
     getCheckpoint: vi.fn().mockReturnValue('0'),
     saveCheckpoint: vi.fn(),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
+    getFileByLguplusFileId: vi.fn().mockReturnValue(null),
     getFolders: vi.fn().mockReturnValue([]),
     getFilesByFolder: vi.fn().mockReturnValue([]),
   }

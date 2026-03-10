@@ -92,6 +92,7 @@ function mockStateManager(): IStateManager {
     getFile: vi.fn().mockImplementation((id) => files.get(id) ?? null),
     getFilesByFolder: vi.fn().mockReturnValue([]),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
+    getFileByLguplusFileId: vi.fn().mockReturnValue(null),
     saveFolder: vi.fn().mockReturnValue('folder-id'),
     updateFolder: vi.fn(),
     getFolders: vi.fn().mockReturnValue([]),
