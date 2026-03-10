@@ -660,6 +660,7 @@ export class SyncEngine implements ISyncEngine {
     const fileId = this.deps.state.saveFile({
       folder_id: folder.id,
       history_no: detected.historyNo,
+      lguplus_file_id: detected.lguplusFileId ? String(detected.lguplusFileId) : null,
       file_name: detected.fileName,
       file_path: detected.filePath,
       file_size: detected.fileSize,

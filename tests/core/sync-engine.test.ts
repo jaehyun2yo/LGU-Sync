@@ -628,6 +628,24 @@ describe('SyncEngine', () => {
       expect((state.saveFile as ReturnType<typeof vi.fn>).mock.calls[0][0].file_name).toBe('upload.dxf')
     })
 
+    it('UP operCode에서 saveFile에 lguplus_file_id가 포함된다', async () => {
+      const upFile: DetectedFile = {
+        fileName: 'upload.dxf', filePath: '/upload.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'UP', historyNo: 801,
+        lguplusFileId: 55001,
+      }
+
+      detector._handlers[0]([upFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lguplus_file_id: '55001',
+          history_no: 801,
+        }),
+      )
+    })
+
     it('CP operCode는 saveFile을 호출하여 파일 동기화를 시작한다', async () => {
       const cpFile: DetectedFile = {
         fileName: 'copied.dxf', filePath: '/copied.dxf', fileSize: 512,
