@@ -175,12 +175,24 @@ export class FileDetector implements IFileDetector {
   private toDetectedFile(item: UploadHistoryItem): DetectedFile {
     // 폴더 관련 operCode (FC, FD, FMV, FRN)는 확장자가 없을 수 있음
     const isFolderOp = ['FC', 'FD', 'FMV', 'FRN'].includes(item.itemOperCode)
-    const fileName = isFolderOp
-      ? item.itemSrcName
-      : `${item.itemSrcName}.${item.itemSrcExtension}`
-    const filePath = isFolderOp
-      ? `${item.itemFolderFullpath}${item.itemSrcName}`
-      : `${item.itemFolderFullpath}${item.itemSrcName}.${item.itemSrcExtension}`
+
+    let fileName: string
+    let filePath: string
+
+    if (isFolderOp) {
+      fileName = item.itemSrcName
+      filePath = `${item.itemFolderFullpath}${item.itemSrcName}`
+    } else if (!item.itemSrcExtension) {
+      // 확장자가 비어있으면 이름만 사용
+      fileName = item.itemSrcName
+      filePath = `${item.itemFolderFullpath}${item.itemSrcName}`
+    } else {
+      // itemSrcName이 이미 해당 확장자로 끝나는지 검사 (대소문자 무시)
+      const extSuffix = `.${item.itemSrcExtension}`
+      const alreadyHasExt = item.itemSrcName.toLowerCase().endsWith(extSuffix.toLowerCase())
+      fileName = alreadyHasExt ? item.itemSrcName : `${item.itemSrcName}.${item.itemSrcExtension}`
+      filePath = `${item.itemFolderFullpath}${fileName}`
+    }
 
     // operCode 런타임 검증
     const operCode: OperCode = VALID_OPER_CODES.has(item.itemOperCode)

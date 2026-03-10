@@ -531,6 +531,119 @@ describe('FileDetector', () => {
     })
   })
 
+  // ── 확장자 중복 방지 ──
+
+  describe('확장자 중복 방지', () => {
+    it('itemSrcName이 이미 확장자를 포함하면 중복으로 붙이지 않는다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 301,
+            itemSrcNo: 6001,
+            itemFolderId: 2001,
+            itemSrcName: '테스트 (12).DXF',
+            itemSrcExtension: 'DXF',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('테스트 (12).DXF')
+      expect(files[0].filePath).toBe('/올리기전용/테스트 (12).DXF')
+      det.stop()
+    })
+
+    it('대소문자가 다른 확장자도 중복을 방지한다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 302,
+            itemSrcNo: 6002,
+            itemFolderId: 2001,
+            itemSrcName: 'design.dxf',
+            itemSrcExtension: 'DXF',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('design.dxf')
+      det.stop()
+    })
+
+    it('확장자가 없는 파일은 기존대로 확장자를 붙인다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 303,
+            itemSrcNo: 6003,
+            itemFolderId: 2001,
+            itemSrcName: 'drawing1',
+            itemSrcExtension: 'dxf',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'CP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('drawing1.dxf')
+      det.stop()
+    })
+
+    it('확장자가 빈 문자열이면 .을 붙이지 않는다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 304,
+            itemSrcNo: 6004,
+            itemFolderId: 2001,
+            itemSrcName: 'noext-file',
+            itemSrcExtension: '',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('noext-file')
+      det.stop()
+    })
+  })
+
   // ── operCode 런타임 검증 ──
 
   describe('operCode 런타임 검증', () => {
