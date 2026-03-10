@@ -24,6 +24,7 @@ export interface DetectedFile {
   filePath: string
   fileSize: number
   historyNo?: number
+  lguplusFileId?: number
   folderId: string
   /** 변동 유형 */
   operCode: OperCode

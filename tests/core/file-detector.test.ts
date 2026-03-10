@@ -644,6 +644,64 @@ describe('FileDetector', () => {
     })
   })
 
+  // ── lguplusFileId 전달 ──
+
+  describe('lguplusFileId 전달', () => {
+    it('DetectedFile에 itemSrcNo가 lguplusFileId로 포함된다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 401,
+            itemSrcNo: 99001,
+            itemFolderId: 2001,
+            itemSrcName: 'test.DXF',
+            itemSrcExtension: 'DXF',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].lguplusFileId).toBe(99001)
+      det.stop()
+    })
+
+    it('폴더 operCode(FC)에서도 lguplusFileId가 포함된다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 402,
+            itemSrcNo: 99002,
+            itemFolderId: 2001,
+            itemSrcName: '새폴더',
+            itemSrcExtension: '',
+            itemSrcType: 'folder',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'FC',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].lguplusFileId).toBe(99002)
+      det.stop()
+    })
+  })
+
   // ── operCode 런타임 검증 ──
 
   describe('operCode 런타임 검증', () => {

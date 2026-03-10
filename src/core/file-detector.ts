@@ -204,6 +204,7 @@ export class FileDetector implements IFileDetector {
       filePath,
       fileSize: 0, // Size not available in history, will be fetched during download
       historyNo: item.historyNo,
+      lguplusFileId: item.itemSrcNo,
       folderId: String(item.itemFolderId),
       operCode,
     }
