@@ -3,6 +3,7 @@ import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { NotificationCenter } from './NotificationCenter'
 import { ConfirmDialog } from './ConfirmDialog'
+import { ToastContainer } from './ToastContainer'
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
@@ -14,6 +15,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </div>
       <NotificationCenter />
       <ConfirmDialog />
+      <ToastContainer />
     </div>
   )
 }
