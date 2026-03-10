@@ -63,6 +63,9 @@ export class SyncEngine implements ISyncEngine {
     this._status = 'syncing'
     this.deps.eventBus.emit('engine:status', { prev, next: 'syncing' })
 
+    // 핸들러 중복 방지: 기존 구독이 있으면 먼저 해제
+    this.detectionUnsubscribe?.()
+
     // Subscribe to file detection events
     this.detectionUnsubscribe = this.deps.detector.onFilesDetected(
       (files, strategy) => this.handleDetectedFiles(files, strategy),
@@ -260,6 +263,14 @@ export class SyncEngine implements ISyncEngine {
         ? Number(file.lguplus_file_id)
         : file.history_no ?? 0
 
+      if (!lguplusFileId) {
+        const errMsg = `No LGU+ file ID available for file ${fileId} (${file.file_name})`
+        this.logger.error(errMsg)
+        this.deps.state.updateFileStatus(fileId, 'dl_failed', { last_error: errMsg })
+        this.emitSyncFailed(errMsg, fileId)
+        return { success: false, fileId, error: errMsg }
+      }
+
       const segments = this.getPathSegments(file.file_path)
       const subPath = segments.join('/')
       const destPath = subPath
@@ -282,11 +293,10 @@ export class SyncEngine implements ISyncEngine {
       )
 
       if (!downloadResult.success) {
-        this.deps.state.updateFileStatus(fileId, 'dl_failed', {
-          last_error: 'Download failed',
-        })
-        this.emitSyncFailed('Download failed', fileId)
-        return { success: false, fileId, error: 'Download failed' }
+        const errMsg = `Download returned empty result for file ${file.lguplus_file_id}`
+        this.deps.state.updateFileStatus(fileId, 'dl_failed', { last_error: errMsg })
+        this.emitSyncFailed(errMsg, fileId)
+        return { success: false, fileId, error: errMsg }
       }
 
       this.deps.state.updateFileStatus(fileId, 'downloaded', {
@@ -654,6 +664,7 @@ export class SyncEngine implements ISyncEngine {
       this.logger.warn(
         `Skipping file ${detected.fileName}: no registered folder for LGU+ folder ID ${detected.folderId}`,
       )
+      this.drainQueue()
       return
     }
 
@@ -661,6 +672,7 @@ export class SyncEngine implements ISyncEngine {
     const fileId = this.deps.state.saveFile({
       folder_id: folder.id,
       history_no: detected.historyNo,
+      lguplus_file_id: detected.lguplusFileId ? String(detected.lguplusFileId) : null,
       file_name: detected.fileName,
       file_path: detected.filePath,
       file_size: detected.fileSize,

@@ -72,6 +72,7 @@ function createMockState(): Partial<IStateManager> {
       checkpoints.set(key, value)
     }),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
+    getFileByLguplusFileId: vi.fn().mockReturnValue(null),
     getFolders: vi.fn().mockReturnValue([]),
   }
 }

@@ -183,6 +183,25 @@ describe('StateManager', () => {
       expect(sm.getFileByHistoryNo(0)).toBeNull()
     })
 
+    it('getFileByLguplusFileId()로 lguplus_file_id 기반 조회', () => {
+      sm.saveFile(makeFileInsert({ lguplus_file_id: '12345' }))
+      const file = sm.getFileByLguplusFileId('12345')
+      expect(file).toBeTruthy()
+      expect(file!.lguplus_file_id).toBe('12345')
+    })
+
+    it('getFileByLguplusFileId()에 없는 ID는 null 반환', () => {
+      expect(sm.getFileByLguplusFileId('nonexistent')).toBeNull()
+    })
+
+    it('getFileByLguplusFileId() 중복 시 최신 레코드 반환', () => {
+      sm.saveFile(makeFileInsert({ lguplus_file_id: '99', file_name: 'old.dxf' }))
+      sm.saveFile(makeFileInsert({ lguplus_file_id: '99', file_name: 'new.dxf' }))
+      const file = sm.getFileByLguplusFileId('99')
+      expect(file).toBeTruthy()
+      expect(file!.file_name).toBe('new.dxf')
+    })
+
     it('getFilesByFolder()에 limit/offset 적용', () => {
       for (let i = 0; i < 5; i++) {
         sm.saveFile(makeFileInsert({ file_name: `file${i}.dxf` }))

@@ -92,6 +92,7 @@ function mockStateManager(): IStateManager {
     getFile: vi.fn().mockImplementation((id) => files.get(id) ?? null),
     getFilesByFolder: vi.fn().mockReturnValue([]),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
+    getFileByLguplusFileId: vi.fn().mockReturnValue(null),
     saveFolder: vi.fn().mockReturnValue('folder-id'),
     updateFolder: vi.fn(),
     getFolders: vi.fn().mockReturnValue([]),
@@ -628,6 +629,24 @@ describe('SyncEngine', () => {
       expect((state.saveFile as ReturnType<typeof vi.fn>).mock.calls[0][0].file_name).toBe('upload.dxf')
     })
 
+    it('UP operCode에서 saveFile에 lguplus_file_id가 포함된다', async () => {
+      const upFile: DetectedFile = {
+        fileName: 'upload.dxf', filePath: '/upload.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'UP', historyNo: 801,
+        lguplusFileId: 55001,
+      }
+
+      detector._handlers[0]([upFile], 'polling')
+      await new Promise(r => setTimeout(r, 10))
+
+      expect(state.saveFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lguplus_file_id: '55001',
+          history_no: 801,
+        }),
+      )
+    })
+
     it('CP operCode는 saveFile을 호출하여 파일 동기화를 시작한다', async () => {
       const cpFile: DetectedFile = {
         fileName: 'copied.dxf', filePath: '/copied.dxf', fileSize: 512,
@@ -747,6 +766,101 @@ describe('SyncEngine', () => {
   })
 
   // ── emitSyncFailed ──
+
+  describe('downloadOnly 에러 메시지', () => {
+    it('다운로드 실패 시 last_error에 구체적 에러 메시지가 저장된다', async () => {
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', folder_id: 'folder1', file_name: 'test.dxf', file_path: '/test.dxf',
+        file_size: 1024, status: 'detected', lguplus_file_id: '5001', retry_count: 0,
+      })
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {})
+
+      const specificError = new Error("Circuit breaker is OPEN for 'lguplus-download'")
+      ;(retry.execute as ReturnType<typeof vi.fn>).mockRejectedValueOnce(specificError)
+
+      const result = await engine.downloadOnly('f1')
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Circuit breaker is OPEN')
+      expect(state.updateFileStatus).toHaveBeenCalledWith(
+        'f1',
+        'dl_failed',
+        expect.objectContaining({
+          last_error: expect.stringContaining('Circuit breaker is OPEN'),
+        }),
+      )
+    })
+
+    it('lguplus_file_id가 없고 history_no도 없으면 에러를 반환한다', async () => {
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', folder_id: 'folder1', file_name: 'test.dxf', file_path: '/test.dxf',
+        file_size: 1024, status: 'detected',
+        lguplus_file_id: null, history_no: null,
+      })
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {})
+
+      const result = await engine.downloadOnly('f1')
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('No LGU+ file ID')
+    })
+  })
+
+  // ── 동시성 - start() 중복 호출 ──
+
+  describe('start() 중복 호출 방지', () => {
+    it('start() 2회 연속 호출 시 onFilesDetected 핸들러는 1번만 등록된다', async () => {
+      await engine.start()
+      await engine.start() // 두 번째 호출 → status=syncing이라 리턴
+
+      // onFilesDetected는 1번만 호출되어야 함
+      expect(detector.onFilesDetected).toHaveBeenCalledTimes(1)
+    })
+
+    it('start() → stop() → start() 순서에서 핸들러가 정확히 1개 활성화된다', async () => {
+      await engine.start()
+      await engine.stop()
+      await engine.start()
+
+      // 이전 구독 해제 후 새 구독 → 총 2회 onFilesDetected 호출 (각 start마다 1회)
+      expect(detector.onFilesDetected).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ── drainQueue - 폴더 미발견 시 큐 처리 ──
+
+  describe('drainQueue() - 폴더 미발견 시 처리', () => {
+    it('폴더 미발견 파일을 건너뛰고 큐의 다음 파일을 정상 처리한다', async () => {
+      // maxConcurrent=5이므로 슬롯이 가득 찰 때까지 동기화가 필요
+      // 간단하게: 폴더 미발견 → drainQueue 호출 확인
+      await engine.start()
+
+      // 첫 번째 파일: 폴더 미발견 → 건너뜀
+      // 두 번째 파일: 폴더 있음 → saveFile 호출
+      ;(state.getFolderByLguplusId as ReturnType<typeof vi.fn>)
+        .mockReturnValueOnce(null) // 첫 파일: 폴더 없음
+        .mockReturnValue({
+          id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '테스트',
+        })
+
+      const file1: DetectedFile = {
+        fileName: 'unknown-folder.dxf', filePath: '/unknown-folder.dxf', fileSize: 512,
+        folderId: '9999', operCode: 'UP', historyNo: 901,
+      }
+      const file2: DetectedFile = {
+        fileName: 'known-folder.dxf', filePath: '/known-folder.dxf', fileSize: 1024,
+        folderId: '1001', operCode: 'UP', historyNo: 902,
+      }
+
+      detector._handlers[0]([file1, file2], 'polling')
+      await new Promise(r => setTimeout(r, 20))
+
+      // file1은 건너뛰고 file2만 saveFile 호출
+      const calls = (state.saveFile as ReturnType<typeof vi.fn>).mock.calls
+      expect(calls.length).toBe(1)
+      expect(calls[0][0].file_name).toBe('known-folder.dxf')
+    })
+  })
 
   describe('sync:failed 이벤트', () => {
     it('다운로드 실패 시 sync:failed 이벤트가 발행된다', async () => {

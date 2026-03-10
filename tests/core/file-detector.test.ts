@@ -35,6 +35,7 @@ function createMockStateManager(): Partial<IStateManager> {
     getCheckpoint: vi.fn().mockReturnValue('0'),
     saveCheckpoint: vi.fn(),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
+    getFileByLguplusFileId: vi.fn().mockReturnValue(null),
     getFolders: vi.fn().mockReturnValue([]),
     getFilesByFolder: vi.fn().mockReturnValue([]),
   }
@@ -531,6 +532,177 @@ describe('FileDetector', () => {
     })
   })
 
+  // ── 확장자 중복 방지 ──
+
+  describe('확장자 중복 방지', () => {
+    it('itemSrcName이 이미 확장자를 포함하면 중복으로 붙이지 않는다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 301,
+            itemSrcNo: 6001,
+            itemFolderId: 2001,
+            itemSrcName: '테스트 (12).DXF',
+            itemSrcExtension: 'DXF',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('테스트 (12).DXF')
+      expect(files[0].filePath).toBe('/올리기전용/테스트 (12).DXF')
+      det.stop()
+    })
+
+    it('대소문자가 다른 확장자도 중복을 방지한다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 302,
+            itemSrcNo: 6002,
+            itemFolderId: 2001,
+            itemSrcName: 'design.dxf',
+            itemSrcExtension: 'DXF',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('design.dxf')
+      det.stop()
+    })
+
+    it('확장자가 없는 파일은 기존대로 확장자를 붙인다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 303,
+            itemSrcNo: 6003,
+            itemFolderId: 2001,
+            itemSrcName: 'drawing1',
+            itemSrcExtension: 'dxf',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'CP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('drawing1.dxf')
+      det.stop()
+    })
+
+    it('확장자가 빈 문자열이면 .을 붙이지 않는다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 304,
+            itemSrcNo: 6004,
+            itemFolderId: 2001,
+            itemSrcName: 'noext-file',
+            itemSrcExtension: '',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].fileName).toBe('noext-file')
+      det.stop()
+    })
+  })
+
+  // ── lguplusFileId 전달 ──
+
+  describe('lguplusFileId 전달', () => {
+    it('DetectedFile에 itemSrcNo가 lguplusFileId로 포함된다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 401,
+            itemSrcNo: 99001,
+            itemFolderId: 2001,
+            itemSrcName: 'test.DXF',
+            itemSrcExtension: 'DXF',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].lguplusFileId).toBe(99001)
+      det.stop()
+    })
+
+    it('폴더 operCode(FC)에서도 lguplusFileId가 포함된다', async () => {
+      const client = createMockLGUplusClient({
+        total: 1,
+        pageSize: 20,
+        items: [
+          {
+            historyNo: 402,
+            itemSrcNo: 99002,
+            itemFolderId: 2001,
+            itemSrcName: '새폴더',
+            itemSrcExtension: '',
+            itemSrcType: 'folder',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'FC',
+            itemUseDate: '2026-03-10 10:00:00',
+          },
+        ],
+      })
+      const det = new FileDetector(client, mockState as IStateManager, eventBus, logger, {
+        pollingIntervalMs: 5000,
+      })
+
+      const files = await det.forceCheck()
+      expect(files[0].lguplusFileId).toBe(99002)
+      det.stop()
+    })
+  })
+
   // ── operCode 런타임 검증 ──
 
   describe('operCode 런타임 검증', () => {
@@ -570,6 +742,113 @@ describe('FileDetector', () => {
         const files = await detector.forceCheck()
         expect(files[0].operCode).toBe(code)
       }
+    })
+  })
+
+  // ── 동시성 ──
+
+  describe('동시성 제어', () => {
+    it('forceCheck() 동시 2회 호출 시 saveCheckpoint는 1회만 호출된다', async () => {
+      // isPolling 잠금으로 두 번째 호출은 즉시 빈 배열 반환
+      const [files1, files2] = await Promise.all([
+        detector.forceCheck(),
+        detector.forceCheck(),
+      ])
+
+      // 둘 중 하나만 실제 폴링 완료 → saveCheckpoint 1회
+      expect(mockState.saveCheckpoint).toHaveBeenCalledTimes(1)
+      // 하나는 결과를 반환하고 하나는 빈 배열
+      const totalDetected = files1.length + files2.length
+      expect(totalDetected).toBe(1)
+    })
+
+    it('백오프 복원 시 setInterval 타이머가 1개만 활성화된다', async () => {
+      const getUploadHistory = mockClient.getUploadHistory as ReturnType<typeof vi.fn>
+
+      // 5회 실패 → 백오프 적용
+      getUploadHistory.mockRejectedValue(new Error('fail'))
+      for (let i = 0; i < 5; i++) {
+        await detector.forceCheck()
+      }
+
+      // 성공으로 복원 → stop/start 내부 호출됨
+      getUploadHistory.mockResolvedValue({
+        total: 0, pageSize: 20, items: [],
+      })
+      detector.start() // 타이머 등록
+      await detector.forceCheck() // 복원 트리거
+
+      // 활성 타이머는 1개여야 함
+      expect(vi.getTimerCount()).toBe(1)
+    })
+  })
+
+  // ── 진행바 이벤트 ──
+
+  describe('scan-progress 이벤트', () => {
+    it('단일 페이지 폴링 시 detection:scan-progress 이벤트가 발행된다', async () => {
+      const progressHandler = vi.fn()
+      eventBus.on('detection:scan-progress', progressHandler)
+
+      await detector.forceCheck()
+
+      expect(progressHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phase: 'polling',
+          currentPage: 1,
+          totalPages: 1,
+        }),
+      )
+    })
+
+    it('다중 페이지 폴링 시 각 페이지마다 scan-progress 이벤트가 발행된다', async () => {
+      const getUploadHistory = mockClient.getUploadHistory as ReturnType<typeof vi.fn>
+      getUploadHistory
+        .mockResolvedValueOnce({
+          total: 40,
+          pageSize: 20,
+          items: Array.from({ length: 20 }, (_, i) => ({
+            historyNo: 140 - i, itemSrcNo: 5000 + i, itemFolderId: 1001,
+            itemSrcName: `file${i}`, itemSrcExtension: 'dxf', itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/', itemOperCode: 'UP',
+            itemUseDate: '2026-02-23 10:00:00',
+          })),
+        })
+        .mockResolvedValueOnce({
+          total: 40,
+          pageSize: 20,
+          items: Array.from({ length: 20 }, (_, i) => ({
+            historyNo: 120 - i, itemSrcNo: 5020 + i, itemFolderId: 1001,
+            itemSrcName: `file${20 + i}`, itemSrcExtension: 'dxf', itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/', itemOperCode: 'UP',
+            itemUseDate: '2026-02-23 09:00:00',
+          })),
+        })
+
+      const progressHandler = vi.fn()
+      eventBus.on('detection:scan-progress', progressHandler)
+
+      await detector.forceCheck()
+
+      // 첫 페이지(phase=polling) + 두 번째 페이지(phase=paginating) = 2회
+      expect(progressHandler).toHaveBeenCalledTimes(2)
+      expect(progressHandler).toHaveBeenNthCalledWith(1,
+        expect.objectContaining({ phase: 'polling', currentPage: 1 }),
+      )
+      expect(progressHandler).toHaveBeenNthCalledWith(2,
+        expect.objectContaining({ phase: 'paginating', currentPage: 2 }),
+      )
+    })
+
+    it('scan-progress 이벤트에 discoveredCount가 포함된다', async () => {
+      const progressHandler = vi.fn()
+      eventBus.on('detection:scan-progress', progressHandler)
+
+      await detector.forceCheck()
+
+      const emittedData = progressHandler.mock.calls[0][0]
+      expect(emittedData).toHaveProperty('discoveredCount')
+      expect(typeof emittedData.discoveredCount).toBe('number')
     })
   })
 

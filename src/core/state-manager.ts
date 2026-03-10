@@ -180,6 +180,13 @@ export class StateManager implements IStateManager {
     return row ? this.mapFileRow(row) : null
   }
 
+  getFileByLguplusFileId(lguplusFileId: string): SyncFileRow | null {
+    const row = this.db
+      .prepare('SELECT * FROM sync_files WHERE lguplus_file_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(lguplusFileId) as Record<string, unknown> | undefined
+    return row ? this.mapFileRow(row) : null
+  }
+
   // ── Sync Folders ──
 
   saveFolder(folder: SyncFolderInsert): string {

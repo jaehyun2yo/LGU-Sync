@@ -24,6 +24,7 @@ export interface DetectedFile {
   filePath: string
   fileSize: number
   historyNo?: number
+  lguplusFileId?: number
   folderId: string
   /** 변동 유형 */
   operCode: OperCode
@@ -49,6 +50,12 @@ export interface EventMap {
     durationMs: number
   }
   'detection:found': { files: DetectedFile[]; strategy: DetectionStrategy }
+  'detection:scan-progress': {
+    phase: 'polling' | 'paginating'
+    currentPage: number
+    totalPages: number
+    discoveredCount: number
+  }
   'opercode:event': {
     operCode: OperCode
     fileName: string

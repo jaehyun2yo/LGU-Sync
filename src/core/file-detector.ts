@@ -36,6 +36,7 @@ export class FileDetector implements IFileDetector {
   private pollingTimer: ReturnType<typeof setInterval> | null = null
   private handlers: DetectionHandler[] = []
   private consecutiveFailures = 0
+  private isPolling = false
 
   constructor(
     client: ILGUplusClient,
@@ -97,6 +98,8 @@ export class FileDetector implements IFileDetector {
   }
 
   private async pollForFiles(): Promise<DetectedFile[]> {
+    if (this.isPolling) return []
+    this.isPolling = true
     try {
       const lastHistoryNo = this.state.getCheckpoint('last_history_no')
 
@@ -124,11 +127,27 @@ export class FileDetector implements IFileDetector {
         MAX_POLL_PAGES,
       )
 
+      // 스캔 진행 이벤트: 첫 페이지 완료
+      this.eventBus.emit('detection:scan-progress', {
+        phase: 'polling',
+        currentPage: 1,
+        totalPages,
+        discoveredCount: allHistoryItems.filter((i) => i.historyNo > lastNo).length,
+      })
+
       // 2페이지 이상 필요하고, 첫 페이지에서 lastNo 초과 항목이 있으면 추가 페이지 조회
       if (totalPages > 1 && firstPage.items.some((i) => i.historyNo > lastNo)) {
         for (let page = 2; page <= totalPages; page++) {
           const pageResult = await this.client.getUploadHistory({ operCode: '', page })
           allHistoryItems.push(...pageResult.items)
+
+          // 스캔 진행 이벤트: 추가 페이지
+          this.eventBus.emit('detection:scan-progress', {
+            phase: 'paginating',
+            currentPage: page,
+            totalPages,
+            discoveredCount: allHistoryItems.filter((i) => i.historyNo > lastNo).length,
+          })
 
           // 이 페이지의 모든 항목이 lastNo 이하이면 더 이상 조회 불필요
           if (pageResult.items.every((i) => i.historyNo <= lastNo)) break
@@ -169,18 +188,32 @@ export class FileDetector implements IFileDetector {
     } catch (error) {
       this.onPollFailure(error as Error)
       return []
+    } finally {
+      this.isPolling = false
     }
   }
 
   private toDetectedFile(item: UploadHistoryItem): DetectedFile {
     // 폴더 관련 operCode (FC, FD, FMV, FRN)는 확장자가 없을 수 있음
     const isFolderOp = ['FC', 'FD', 'FMV', 'FRN'].includes(item.itemOperCode)
-    const fileName = isFolderOp
-      ? item.itemSrcName
-      : `${item.itemSrcName}.${item.itemSrcExtension}`
-    const filePath = isFolderOp
-      ? `${item.itemFolderFullpath}${item.itemSrcName}`
-      : `${item.itemFolderFullpath}${item.itemSrcName}.${item.itemSrcExtension}`
+
+    let fileName: string
+    let filePath: string
+
+    if (isFolderOp) {
+      fileName = item.itemSrcName
+      filePath = `${item.itemFolderFullpath}${item.itemSrcName}`
+    } else if (!item.itemSrcExtension) {
+      // 확장자가 비어있으면 이름만 사용
+      fileName = item.itemSrcName
+      filePath = `${item.itemFolderFullpath}${item.itemSrcName}`
+    } else {
+      // itemSrcName이 이미 해당 확장자로 끝나는지 검사 (대소문자 무시)
+      const extSuffix = `.${item.itemSrcExtension}`
+      const alreadyHasExt = item.itemSrcName.toLowerCase().endsWith(extSuffix.toLowerCase())
+      fileName = alreadyHasExt ? item.itemSrcName : `${item.itemSrcName}.${item.itemSrcExtension}`
+      filePath = `${item.itemFolderFullpath}${fileName}`
+    }
 
     // operCode 런타임 검증
     const operCode: OperCode = VALID_OPER_CODES.has(item.itemOperCode)
@@ -192,6 +225,7 @@ export class FileDetector implements IFileDetector {
       filePath,
       fileSize: 0, // Size not available in history, will be fetched during download
       historyNo: item.historyNo,
+      lguplusFileId: item.itemSrcNo,
       folderId: String(item.itemFolderId),
       operCode,
     }

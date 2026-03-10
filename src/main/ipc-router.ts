@@ -245,6 +245,16 @@ export function registerIpcHandlers(services: CoreServices): void {
     }
   })
 
+  ipcMain.handle('sync:reset-circuit', async (_event, request) => {
+    try {
+      const { circuitName } = request
+      retry.resetCircuit(circuitName)
+      return ok(undefined)
+    } catch (e) {
+      return fail('RESET_CIRCUIT_FAILED', (e as Error).message)
+    }
+  })
+
   // ── Files ──
 
   ipcMain.handle('files:list', async (_event, request) => {
@@ -875,12 +885,23 @@ export function registerIpcHandlers(services: CoreServices): void {
           })
 
           // All folders are now DB-registered (auto-registered above if needed)
-          const existing = state.getFileByHistoryNo(file.itemId)
-          if (existing && existing.status === 'completed' && !request.forceRescan) {
-            continue
+          const existing = state.getFileByLguplusFileId(String(file.itemId))
+          if (existing && !request.forceRescan) {
+            if (existing.status === 'downloaded' || existing.status === 'completed') {
+              downloadedFiles++
+              results.push({
+                fileId: existing.id,
+                fileName: file.itemName,
+                success: true,
+                downloadPath: existing.download_path ?? undefined,
+                fileSize: file.itemSize,
+              })
+              continue
+            }
           }
 
-          const fileId = state.saveFile({
+          // Reuse existing DB record if present (avoid duplicates), otherwise create new
+          const fileId = existing?.id ?? state.saveFile({
             folder_id: folder.dbFolderId!,
             file_name: file.itemName,
             file_path: `/${folder.folderName}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
@@ -1076,14 +1097,30 @@ export function registerIpcHandlers(services: CoreServices): void {
         scannedFiles += files.length
 
         for (const file of files) {
-          const existing = state.getFileByHistoryNo(file.itemId)
-          if (existing && existing.status === 'completed' && !request.forceRescan) {
-            continue
+          const existing = state.getFileByLguplusFileId(String(file.itemId))
+          if (existing && !request.forceRescan) {
+            if (existing.status === 'completed') {
+              continue
+            }
+            // Already downloaded — skip to upload
+            if (existing.status === 'downloaded') {
+              newFiles++
+              const ulResult = await engine.uploadOnly(existing.id)
+              if (ulResult.success) syncedFiles++
+              else failedFiles++
+              results.push({
+                fileId: existing.id, fileName: file.itemName,
+                downloadSuccess: true, uploadSuccess: ulResult.success,
+                error: ulResult.error,
+              })
+              continue
+            }
           }
 
           newFiles++
 
-          const fileId = state.saveFile({
+          // Reuse existing DB record if present (avoid duplicates), otherwise create new
+          const fileId = existing?.id ?? state.saveFile({
             folder_id: folder.id,
             file_name: file.itemName,
             file_path: `/${folder.lguplus_folder_name}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
@@ -1352,8 +1389,27 @@ export function bridgeEventsToRenderer(
           folderPath: f.filePath,
           fileSize: f.fileSize,
           detectedAt: new Date().toISOString(),
+          operCode: f.operCode,
         })),
         source: data.strategy as 'polling' | 'snapshot',
+      })
+    },
+    'detection:scan-progress': (data: { phase: 'polling' | 'paginating'; currentPage: number; totalPages: number; discoveredCount: number }) => {
+      send('detection:scan-progress', {
+        phase: data.phase,
+        currentPage: data.currentPage,
+        totalPages: data.totalPages,
+        discoveredCount: data.discoveredCount,
+      })
+    },
+    'opercode:event': (data: { operCode: string; fileName: string; filePath: string; folderId: string; historyNo?: number; timestamp: string }) => {
+      send('opercode:event', {
+        operCode: data.operCode,
+        fileName: data.fileName,
+        filePath: data.filePath,
+        folderId: data.folderId,
+        historyNo: data.historyNo,
+        timestamp: data.timestamp,
       })
     },
     'session:expired': (data: { reason: string }) => {
@@ -1364,7 +1420,7 @@ export function bridgeEventsToRenderer(
         requiresManualAction: true,
       })
     },
-  } as const
+  }
 
   // Register handlers
   for (const [event, handler] of Object.entries(handlers)) {
@@ -1430,6 +1486,7 @@ function buildSyncStatus(services: CoreServices) {
     },
     recentFiles: topRecentFiles,
     failedCount: state.getDlqItems().length,
+    circuits: services.retry.getAllCircuitStates(),
     lastUpdatedAt: new Date().toISOString(),
   }
 }
@@ -1449,7 +1506,7 @@ function mapFileRow(f: any) {
 export function removeAllIpcHandlers(): void {
   const channels = [
     'sync:start', 'sync:stop', 'sync:pause', 'sync:resume', 'sync:status',
-    'sync:full-sync', 'sync:retry-failed',
+    'sync:full-sync', 'sync:retry-failed', 'sync:reset-circuit',
     'files:list', 'files:detail', 'files:search',
     'folders:list', 'folders:tree', 'folders:toggle', 'folders:discover',
     'migration:scan', 'migration:start',

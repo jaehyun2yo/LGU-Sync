@@ -57,6 +57,7 @@ export interface SyncStatus {
   }
   recentFiles: SyncFileInfo[]
   failedCount: number
+  circuits: Record<string, 'CLOSED' | 'OPEN' | 'HALF_OPEN'>
   lastUpdatedAt: string
 }
 
@@ -390,6 +391,7 @@ export interface IpcChannelMap {
   'sync:status': { request: void; response: ApiResponse<SyncStatus> }
   'sync:full-sync': { request: FullSyncRequest; response: ApiResponse<FullSyncResult> }
   'sync:retry-failed': { request: RetryRequest; response: ApiResponse<RetryResult> }
+  'sync:reset-circuit': { request: { circuitName: string }; response: ApiResponse<void> }
 
   // Data queries
   'files:list': { request: FileListRequest; response: ApiResponse<Paginated<SyncFileInfo>> }
@@ -550,12 +552,20 @@ export interface OperCodeEvent {
   timestamp: string
 }
 
+export interface ScanProgressEvent {
+  phase: 'polling' | 'paginating'
+  currentPage: number
+  totalPages: number
+  discoveredCount: number
+}
+
 export interface IpcEventMap {
   'sync:progress': SyncProgressEvent
   'sync:file-completed': FileCompletedEvent
   'sync:file-failed': FileFailedEvent
   'sync:status-changed': StatusChangedEvent
   'detection:new-files': NewFilesEvent
+  'detection:scan-progress': ScanProgressEvent
   'opercode:event': OperCodeEvent
   'auth:expired': AuthExpiredEvent
   'error:critical': CriticalErrorEvent

@@ -167,9 +167,10 @@ describe('LGUplusClient', () => {
       expect(createWriteStream).toHaveBeenCalled()
     })
 
-    it('파일 없음 (fileId=9999) → success: false', async () => {
-      const result = await client.downloadFile(9999, '/tmp/missing.dxf')
-      expect(result).toEqual({ success: false, size: 0, filename: '' })
+    it('파일 없음 (fileId=9999) → FileDownloadUrlFetchError throw', async () => {
+      await expect(client.downloadFile(9999, '/tmp/missing.dxf')).rejects.toThrow(
+        /Failed to get download URL/,
+      )
     })
 
     it('크기 불일치 시 FileDownloadSizeMismatchError를 throw한다', async () => {
