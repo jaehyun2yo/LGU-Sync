@@ -51,7 +51,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       lguplus: { ...current.lguplus, ...(partial.lguplus ?? {}) },
       webhard: { ...current.webhard, ...(partial.webhard ?? {}) },
       sync: { ...current.sync, ...(partial.sync ?? {}) },
-      notification: { ...current.notification, ...(partial.notification ?? {}) },
+      notification: partial.notification
+        ? {
+            ...current.notification,
+            ...partial.notification,
+            sound: { ...current.notification.sound, ...(partial.notification.sound ?? {}) },
+            toast: { ...current.notification.toast, ...(partial.notification.toast ?? {}) },
+            inApp: { ...current.notification.inApp, ...(partial.notification.inApp ?? {}) },
+            rules: { ...current.notification.rules, ...(partial.notification.rules ?? {}) },
+          }
+        : current.notification,
       system: { ...current.system, ...(partial.system ?? {}) },
     }
     set({ settings: merged, isDirty: true })

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Eye, EyeOff, Check, X, Loader, Save } from 'lucide-react'
+import { Eye, EyeOff, Check, X, Loader, Save, Volume2, Play } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { useSettingsStore } from '../stores/settings-store'
+import { soundPlayer, SOUND_PRESETS } from '../lib/notification-sound'
 import type { AppSettings, ConnectionTestResult } from '../../shared/ipc-types'
+import type { NotificationEventType, SoundPresetId, EventNotificationRule } from '../../core/types/config.types'
 
 // ── Tab config ──
 
@@ -314,27 +316,198 @@ function SyncTab() {
 
 // ── Notification tab ──
 
+const EVENT_LABELS: Record<NotificationEventType, string> = {
+  'file-detected': '파일 감지',
+  'file-completed': '동기화 완료',
+  'sync-failed': '동기화 실패',
+  'sync-completed': '전체 동기화 완료',
+  'session-expired': '세션 만료',
+}
+
+const PRESET_OPTIONS: { id: SoundPresetId; label: string }[] = [
+  { id: 'default', label: '기본음' },
+  { id: 'chime', label: '차임' },
+  { id: 'bell', label: '벨' },
+  { id: 'pop', label: '팝' },
+  { id: 'ding', label: '딩' },
+]
+
 function NotificationTab() {
   const { settings, updateSettings } = useSettingsStore()
   if (!settings) return null
 
+  const notif = settings.notification
+
+  const updateNotif = (patch: Partial<typeof notif>) => {
+    updateSettings({ notification: { ...notif, ...patch } })
+  }
+
+  const updateRule = (event: NotificationEventType, patch: Partial<EventNotificationRule>) => {
+    updateNotif({
+      rules: {
+        ...notif.rules,
+        [event]: { ...notif.rules[event], ...patch },
+      },
+    })
+  }
+
+  const handlePreview = (presetId: SoundPresetId) => {
+    soundPlayer.setVolume(notif.sound.volume)
+    soundPlayer.preview(presetId)
+  }
+
   return (
-    <Section title="알림 설정">
-      <Toggle
-        label="인앱 알림"
-        checked={settings.notification.inApp}
-        onChange={(v) =>
-          updateSettings({ notification: { ...settings.notification, inApp: v } })
-        }
-      />
-      <Toggle
-        label="토스트 알림"
-        checked={settings.notification.toast}
-        onChange={(v) =>
-          updateSettings({ notification: { ...settings.notification, toast: v } })
-        }
-      />
-    </Section>
+    <div className="space-y-6">
+      {/* Master toggle */}
+      <Section title="알림 설정">
+        <Toggle label="알림 활성화" checked={notif.enabled} onChange={(v) => updateNotif({ enabled: v })} />
+      </Section>
+
+      {notif.enabled && (
+        <>
+          {/* Sound settings */}
+          <Section title="알림음">
+            <Toggle
+              label="알림음 사용"
+              checked={notif.sound.enabled}
+              onChange={(v) => updateNotif({ sound: { ...notif.sound, enabled: v } })}
+            />
+            {notif.sound.enabled && (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-card-foreground">알림음 선택</span>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={notif.sound.preset}
+                      onChange={(e) =>
+                        updateNotif({ sound: { ...notif.sound, preset: e.target.value as SoundPresetId } })
+                      }
+                      className="px-2 py-1.5 text-sm bg-background border border-border rounded-md text-card-foreground focus:outline-none focus:ring-1 focus:ring-info"
+                    >
+                      {PRESET_OPTIONS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => handlePreview(notif.sound.preset)}
+                      className="p-1.5 text-muted-foreground hover:text-card-foreground transition-colors rounded-md hover:bg-accent"
+                      title="미리듣기"
+                    >
+                      <Play className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-card-foreground flex items-center gap-1.5">
+                    <Volume2 className="h-3.5 w-3.5" />
+                    볼륨
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={notif.sound.volume}
+                      onChange={(e) =>
+                        updateNotif({ sound: { ...notif.sound, volume: parseInt(e.target.value, 10) } })
+                      }
+                      className="w-24 accent-info"
+                    />
+                    <span className="text-xs text-muted-foreground w-8 text-right">{notif.sound.volume}%</span>
+                  </div>
+                </div>
+              </>
+            )}
+          </Section>
+
+          {/* Toast settings */}
+          <Section title="토스트 알림">
+            <Toggle
+              label="토스트 알림 사용"
+              checked={notif.toast.enabled}
+              onChange={(v) => updateNotif({ toast: { ...notif.toast, enabled: v } })}
+            />
+            {notif.toast.enabled && (
+              <>
+                <NumberField
+                  label="표시 시간"
+                  value={notif.toast.durationMs / 1000}
+                  onChange={(v) => updateNotif({ toast: { ...notif.toast, durationMs: v * 1000 } })}
+                  min={1}
+                  max={30}
+                  unit="초"
+                />
+                <NumberField
+                  label="최대 표시 수"
+                  value={notif.toast.maxVisible}
+                  onChange={(v) => updateNotif({ toast: { ...notif.toast, maxVisible: v } })}
+                  min={1}
+                  max={10}
+                />
+              </>
+            )}
+          </Section>
+
+          {/* In-app settings */}
+          <Section title="인앱 알림">
+            <Toggle
+              label="인앱 알림 사용"
+              checked={notif.inApp.enabled}
+              onChange={(v) => updateNotif({ inApp: { enabled: v } })}
+            />
+          </Section>
+
+          {/* Event rules matrix */}
+          <Section title="이벤트별 알림 규칙">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="text-left font-medium py-1.5 pr-4">이벤트</th>
+                    <th className="text-center font-medium py-1.5 px-3">소리</th>
+                    <th className="text-center font-medium py-1.5 px-3">토스트</th>
+                    <th className="text-center font-medium py-1.5 px-3">인앱</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(Object.keys(EVENT_LABELS) as NotificationEventType[]).map((event) => (
+                    <tr key={event} className="border-t border-border/50">
+                      <td className="py-2 pr-4 text-card-foreground">{EVENT_LABELS[event]}</td>
+                      <td className="py-2 px-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={notif.rules[event].sound}
+                          onChange={(e) => updateRule(event, { sound: e.target.checked })}
+                          className="accent-info"
+                        />
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={notif.rules[event].toast}
+                          onChange={(e) => updateRule(event, { toast: e.target.checked })}
+                          className="accent-info"
+                        />
+                      </td>
+                      <td className="py-2 px-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={notif.rules[event].inApp}
+                          onChange={(e) => updateRule(event, { inApp: e.target.checked })}
+                          className="accent-info"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        </>
+      )}
+    </div>
   )
 }
 

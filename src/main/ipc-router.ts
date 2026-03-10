@@ -1186,21 +1186,6 @@ export function registerIpcHandlers(services: CoreServices): void {
       const onDetection = async ({ files, strategy }: { files: DetectedFile[]; strategy: DetectionStrategy }): Promise<void> => {
         if (!realtimeTestRunning) return
 
-        if (request.enableNotification && files.length > 0) {
-          const { Notification: ElectronNotification } = await import('electron')
-          new ElectronNotification({
-            title: '새 이벤트 감지됨',
-            body: `${files.length}개 이벤트가 감지되었습니다.`,
-          }).show()
-
-          notification.notify({
-            type: 'info',
-            title: '새 이벤트 감지',
-            message: `${files.length}개 이벤트가 감지되었습니다.`,
-            groupKey: 'realtime-detection',
-          })
-        }
-
         for (const file of files) {
           const operLabel = getOperCodeLabel(file.operCode)
           sendEvent({
