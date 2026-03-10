@@ -91,19 +91,25 @@ describe('FolderDiscovery - 병렬 처리', () => {
   })
 
   it('새 폴더 여러 개를 동시에 처리한다', async () => {
-    // HOME → 올리기전용 → 5개 새 폴더
+    // HOME → 올리기전용 → 5개 새 폴더 (재귀 탐색)
+    // 올리기전용 자체도 새 폴더로 등록됨 → 총 6개
     ;(lguplus.getGuestFolderRootId as ReturnType<typeof vi.fn>).mockResolvedValue(1000)
-    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce([
-        { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
-      ])
-      .mockResolvedValueOnce(
-        Array.from({ length: 5 }, (_, i) => ({
-          folderId: 3000 + i,
-          folderName: `Company-${i}`,
-          parentFolderId: 2000,
-        })),
-      )
+
+    // 기본: leaf 노드는 빈 배열 반환
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValue([])
+
+    // HOME → [올리기전용]
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
+    ])
+    // 올리기전용 → [Company-0 ~ Company-4]
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({
+        folderId: 3000 + i,
+        folderName: `Company-${i}`,
+        parentFolderId: 2000,
+      })),
+    )
 
     // 각 ensureFolderPath가 50ms 걸림
     ;(uploader.ensureFolderPath as ReturnType<typeof vi.fn>).mockImplementation(async () => {
@@ -118,20 +124,27 @@ describe('FolderDiscovery - 병렬 처리', () => {
     const result = await discovery.discoverFolders()
     const elapsed = Date.now() - start
 
-    expect(result.newFolders).toBe(5)
-    // 순차이면 ~250ms (5*50ms), 병렬(3)이면 ~100ms
-    expect(elapsed).toBeLessThan(180)
+    // 올리기전용(1) + Company-0~4(5) = 6개 새 폴더
+    expect(result.newFolders).toBe(6)
+    expect(result.total).toBe(6)
+    // 순차이면 ~300ms (6*50ms), 병렬(3)이면 ~150ms 이내
+    expect(elapsed).toBeLessThan(250)
   })
 
   it('기존 폴더는 병렬 처리 없이 즉시 처리된다', async () => {
     ;(lguplus.getGuestFolderRootId as ReturnType<typeof vi.fn>).mockResolvedValue(1000)
-    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce([
-        { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
-      ])
-      .mockResolvedValueOnce([
-        { folderId: 3000, folderName: 'ExistingCo', parentFolderId: 2000 },
-      ])
+
+    // 기본: leaf 노드는 빈 배열 반환
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValue([])
+
+    // HOME → [올리기전용]
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
+    ])
+    // 올리기전용 → [ExistingCo]
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { folderId: 3000, folderName: 'ExistingCo', parentFolderId: 2000 },
+    ])
 
     ;(state.getFolderByLguplusId as ReturnType<typeof vi.fn>).mockReturnValue({
       id: 'existing-id',
@@ -139,7 +152,8 @@ describe('FolderDiscovery - 병렬 처리', () => {
     })
 
     const result = await discovery.discoverFolders()
-    expect(result.existingFolders).toBe(1)
+    // 올리기전용(1) + ExistingCo(1) = 2개 기존 폴더
+    expect(result.existingFolders).toBe(2)
     expect(result.newFolders).toBe(0)
     // ensureFolderPath는 호출되지 않아야 함
     expect(uploader.ensureFolderPath).not.toHaveBeenCalled()

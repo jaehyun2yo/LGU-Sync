@@ -7,6 +7,7 @@ import type {
   DownloadUrlInfo,
   DownloadResult,
   ProgressCallback,
+  CreateFolderResult,
 } from './types/lguplus-client.types'
 import type { ILogger } from './types/logger.types'
 import type { IRetryManager } from './types/retry-manager.types'
@@ -65,8 +66,18 @@ export class LGUplusClient implements ILGUplusClient {
   // ══════════════════════════════════════════════════
 
   private updateCookies(response: Response): void {
-    const setCookie = response.headers.get('set-cookie')
-    if (!setCookie) return
+    // Prefer getSetCookie() (returns array) over get('set-cookie') (may merge with commas)
+    let setCookieHeaders: string[]
+    if (typeof response.headers.getSetCookie === 'function') {
+      setCookieHeaders = response.headers.getSetCookie()
+    } else {
+      const raw = response.headers.get('set-cookie')
+      if (!raw) return
+      // Fallback: split on comma boundaries (heuristic for merged headers)
+      setCookieHeaders = raw.split(/,(?=\s*\w+=)/)
+    }
+
+    if (setCookieHeaders.length === 0) return
 
     const existing = new Map<string, string>()
     if (this.cookies) {
@@ -76,14 +87,17 @@ export class LGUplusClient implements ILGUplusClient {
       }
     }
 
-    // Parse Set-Cookie header: take "key=value" before any ";" attributes
-    for (const raw of setCookie.split(/,(?=\s*\w+=)/)) {
-      const cookiePart = raw.split(';')[0].trim()
+    for (const header of setCookieHeaders) {
+      const cookiePart = header.split(';')[0].trim()
       const [key, ...rest] = cookiePart.split('=')
       if (key) existing.set(key.trim(), rest.join('='))
     }
 
     this.cookies = [...existing.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
+    this.logger.debug('Cookies updated', {
+      cookieKeys: [...existing.keys()],
+      count: existing.size,
+    })
   }
 
   private getCommonHeaders(): Record<string, string> {
@@ -114,49 +128,121 @@ export class LGUplusClient implements ILGUplusClient {
     this.storedPassword = password
 
     try {
-      // Step 1: GET /login — acquire initial cookies
+      // Step 1: GET /login — acquire initial cookies + parse login page form
       const loginPage = await fetch(`${this.baseUrl}/login`, {
-        headers: this.getCommonHeaders(),
-        redirect: 'manual',
+        headers: {
+          ...this.getCommonHeaders(),
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        },
+        redirect: 'follow',
       })
       this.updateCookies(loginPage)
-      this.logger.debug('Login step 1: got initial cookies')
 
-      // Step 2: POST /login-process — submit credentials
-      const formBody = new URLSearchParams({
-        id: '',
-        pw: '',
-        health: '',
-        userType: 'Manage',
-        fakeLoginId: userId,
-        loginId: userId,
-        password: password,
+      const loginPageBody = await loginPage.text()
+      this.logger.debug('Login step 1: GET /login', {
+        status: loginPage.status,
+        url: loginPage.url,
+        bodyLength: loginPageBody.length,
+        cookieSnapshot: this.cookies.slice(0, 200),
       })
 
-      const loginRes = await fetch(`${this.baseUrl}/login-process`, {
+      // Parse ALL form fields from the login page (hidden + visible inputs)
+      const formFields: Record<string, string> = {}
+      const inputRegex = /<input[^>]*>/gi
+      let match: RegExpExecArray | null
+      while ((match = inputRegex.exec(loginPageBody)) !== null) {
+        const tag = match[0]
+        const nameMatch = /name=["']([^"']+)["']/.exec(tag)
+        if (!nameMatch) continue
+        const name = nameMatch[1]
+        const valueMatch = /value=["']([^"']*)["']/.exec(tag)
+        const value = valueMatch?.[1] ?? ''
+        formFields[name] = value
+      }
+
+      // Also check meta tags for CSRF tokens (Spring Security pattern)
+      const csrfMetaMatch = /<meta\s+name=["']_csrf["'][^>]*content=["']([^"']*)["']/i.exec(loginPageBody)
+      const csrfHeaderMatch = /<meta\s+name=["']_csrf_header["'][^>]*content=["']([^"']*)["']/i.exec(loginPageBody)
+      if (csrfMetaMatch) {
+        formFields['_csrf'] = csrfMetaMatch[1]
+      }
+
+      // Extract form action URL
+      const formActionMatch = /<form[^>]*action=["']([^"']*)["'][^>]*>/i.exec(loginPageBody)
+      const formAction = formActionMatch?.[1] ?? '/login-process'
+
+      this.logger.debug('Login page form analysis', {
+        allInputNames: Object.keys(formFields),
+        formAction,
+        hasCsrfMeta: !!csrfMetaMatch,
+        csrfHeader: csrfHeaderMatch?.[1],
+        csrfToken: csrfMetaMatch ? csrfMetaMatch[1].slice(0, 20) + '...' : 'none',
+      })
+
+      // Step 2: POST login — submit credentials using parsed form structure
+      // Override credential fields with user values
+      // Note: 'id' and 'pw' are honeypot fields — must stay empty
+      // Note: 'lgin1' is a submit button — exclude from POST data
+      delete formFields['lgin1']
+
+      // userType is a radio button (Manage=Admin, General=Guest)
+      // The regex loop picks up the LAST radio value, which may not be 'Manage'.
+      // Force 'Manage' to match the working login flow.
+      formFields['userType'] = 'Manage'
+
+      // Set credential fields
+      formFields['loginId'] = userId
+      formFields['fakeLoginId'] = userId
+      formFields['password'] = password
+
+      this.logger.debug('Login step 2: form data to submit', {
+        fields: Object.keys(formFields),
+        formAction,
+        userId,
+      })
+
+      const postUrl = formAction.startsWith('http')
+        ? formAction
+        : `${this.baseUrl}${formAction.startsWith('/') ? '' : '/'}${formAction}`
+
+      const loginRes = await fetch(postUrl, {
         method: 'POST',
-        body: formBody.toString(),
+        body: new URLSearchParams(formFields).toString(),
         headers: {
           ...this.getCommonHeaders(),
           'Content-Type': 'application/x-www-form-urlencoded',
           Origin: this.baseUrl,
           Referer: `${this.baseUrl}/login`,
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+          ...(csrfHeaderMatch && csrfMetaMatch
+            ? { [csrfHeaderMatch[1]]: csrfMetaMatch[1] }
+            : {}),
         },
         redirect: 'manual',
       })
       this.updateCookies(loginRes)
-      this.logger.debug('Login step 2: submitted credentials', {
+      this.logger.debug('Login step 2: POST response', {
         status: loginRes.status,
+        location: loginRes.headers.get('location'),
+        cookieSnapshot: this.cookies.slice(0, 200),
       })
 
       // Follow redirects manually (up to 5)
       let nextUrl = loginRes.headers.get('location')
       let redirectCount = 0
       while (nextUrl && redirectCount < 5) {
+        this.logger.debug(`Login redirect ${redirectCount + 1}`, { url: nextUrl })
+
         // Check if redirect goes to /login (failed login)
-        if (nextUrl.includes('/login') && !nextUrl.includes('/folders')) {
-          this.logger.warn('Login failed: redirected to login page', { userId })
-          return { success: false, message: 'Invalid credentials' }
+        if (nextUrl.includes('/login') && !nextUrl.includes('/login-process') && !nextUrl.includes('/folders')) {
+          this.logger.warn('Login failed: redirected to login page', {
+            userId,
+            redirectUrl: nextUrl,
+            redirectCount,
+          })
+          return { success: false, message: `Invalid credentials (redirect to ${nextUrl})` }
         }
         const url = nextUrl.startsWith('http') ? nextUrl : `${this.baseUrl}${nextUrl}`
         const redirectRes = await fetch(url, {
@@ -164,22 +250,38 @@ export class LGUplusClient implements ILGUplusClient {
           redirect: 'manual',
         })
         this.updateCookies(redirectRes)
+        this.logger.debug(`Login redirect ${redirectCount + 1} response`, {
+          status: redirectRes.status,
+          location: redirectRes.headers.get('location'),
+        })
         nextUrl = redirectRes.headers.get('location')
         redirectCount++
       }
 
       // Step 3: GET /folders/home — verify login success
       const homeRes = await fetch(`${this.baseUrl}/folders/home`, {
-        headers: this.getCommonHeaders(),
+        headers: {
+          ...this.getCommonHeaders(),
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
         redirect: 'manual',
       })
       this.updateCookies(homeRes)
 
+      this.logger.debug('Login step 3: GET /folders/home', {
+        status: homeRes.status,
+        location: homeRes.headers.get('location'),
+      })
+
       // Redirect to /login means failed
       const homeLocation = homeRes.headers.get('location')
       if (homeLocation && homeLocation.includes('/login')) {
-        this.logger.warn('Login failed: home redirected to login', { userId })
-        return { success: false, message: 'Login verification failed' }
+        this.logger.warn('Login failed: home redirected to login', {
+          userId,
+          location: homeLocation,
+          cookieSnapshot: this.cookies.slice(0, 120),
+        })
+        return { success: false, message: `Login verification failed (home→${homeLocation})` }
       }
 
       const homeBody = await homeRes.text()
@@ -188,16 +290,28 @@ export class LGUplusClient implements ILGUplusClient {
         homeBody.includes('내 폴더') ||
         homeBody.includes('myFolderCnt')
 
+      this.logger.debug('Login step 3: home page verification', {
+        bodyLength: homeBody.length,
+        hasLogout: homeBody.includes('로그아웃'),
+        hasMyFolder: homeBody.includes('내 폴더'),
+        hasMyFolderCnt: homeBody.includes('myFolderCnt'),
+        bodyPreview: homeBody.slice(0, 300),
+      })
+
       if (isLoggedIn) {
         this.authenticated = true
         this.logger.info('Login successful', { userId })
         return { success: true }
       }
 
-      this.logger.warn('Login verification failed: keywords not found', { userId })
-      return { success: false, message: 'Login verification failed' }
+      this.logger.warn('Login verification failed: keywords not found', {
+        userId,
+        bodyLength: homeBody.length,
+        bodyPreview: homeBody.slice(0, 500),
+      })
+      return { success: false, message: 'Login verification failed: expected keywords not found in home page' }
     } catch (err) {
-      this.logger.error('Login exception', { error: (err as Error).message })
+      this.logger.error('Login exception', { error: (err as Error).message, stack: (err as Error).stack })
       throw new AuthLoginFailedError(`Login failed: ${(err as Error).message}`, { userId })
     }
   }
@@ -323,7 +437,7 @@ export class LGUplusClient implements ILGUplusClient {
         throw new AuthSessionExpiredError('Session expired: re-login failed', { url: this.baseUrl })
       }
 
-      const text = await res.text()
+      const text = await this.decodeResponse(res)
 
       // 빈 응답
       if (!text.trim()) {
@@ -366,6 +480,48 @@ export class LGUplusClient implements ILGUplusClient {
     }
 
     throw new AuthSessionExpiredError('Session expired: max retries exceeded', { url: this.baseUrl })
+  }
+
+  /**
+   * Response body를 텍스트로 디코딩.
+   * LGU+ 웹하드 API는 EUC-KR 인코딩으로 응답할 수 있으므로,
+   * Content-Type charset을 확인하거나 charset이 없으면 EUC-KR을 시도한다.
+   */
+  private async decodeResponse(res: Response): Promise<string> {
+    const contentType = res.headers.get('content-type') ?? ''
+    const charsetMatch = contentType.match(/charset=([^\s;]+)/i)
+    const charset = charsetMatch?.[1]?.toLowerCase()
+
+    // charset이 명시적으로 UTF-8이면 그대로 사용
+    if (charset === 'utf-8' || charset === 'utf8') {
+      return res.text()
+    }
+
+    // EUC-KR 명시 또는 charset 미지정 시 → arrayBuffer로 읽어서 디코딩
+    const buffer = await res.arrayBuffer()
+
+    if (charset && charset !== 'utf-8' && charset !== 'utf8') {
+      // 명시된 charset으로 디코딩 (euc-kr, euc_kr, cp949 등)
+      try {
+        return new TextDecoder(charset).decode(buffer)
+      } catch {
+        // 지원되지 않는 charset이면 UTF-8 fallback
+        return new TextDecoder('utf-8').decode(buffer)
+      }
+    }
+
+    // charset 미지정: UTF-8로 먼저 시도, replacement character(�)가 있으면 EUC-KR 재시도
+    const utf8Text = new TextDecoder('utf-8').decode(buffer)
+    if (!utf8Text.includes('\uFFFD')) {
+      return utf8Text
+    }
+
+    // UTF-8 디코딩에 replacement character가 있으면 EUC-KR로 재시도
+    try {
+      return new TextDecoder('euc-kr').decode(buffer)
+    } catch {
+      return utf8Text
+    }
   }
 
   /** Response에서 세션 만료 여부를 판별 */
@@ -450,6 +606,22 @@ export class LGUplusClient implements ILGUplusClient {
     const folders = await this.getSubFolders(parentId)
     const found = folders.find((f) => f.folderName === name)
     return found?.folderId ?? null
+  }
+
+  async createFolder(parentId: number, name: string): Promise<CreateFolderResult> {
+    const data = await this.callWhApi({
+      MESSAGE_TYPE: 'FOLDER',
+      PROCESS_TYPE: 'MAKE',
+      REQUEST_SHARED: 'G',
+      UPPER_ID: parentId,
+      NAME: name,
+    })
+
+    return {
+      success: data.RESULT_CODE === '0000',
+      resultCode: data.RESULT_CODE,
+      resultMsg: data.RESULT_MSG,
+    }
   }
 
   // ══════════════════════════════════════════════════
@@ -738,7 +910,8 @@ export class LGUplusClient implements ILGUplusClient {
         return null
       }
 
-      const data = (await res.json()) as {
+      const text = await this.decodeResponse(res)
+      const data = JSON.parse(text) as {
         file: {
           fileManagementNumber: number
           fileName: string

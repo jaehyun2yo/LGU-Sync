@@ -48,72 +48,8 @@ export class FolderDiscovery {
       return result
     }
 
-    // Step 2: Find "올리기전용" folder under HOME
-    const homeFolders = await this.lguplus.getSubFolders(rootId)
-    const uploadRoot = homeFolders.find((f) => f.folderName.includes('올리기전용'))
-    if (!uploadRoot) {
-      this.logger.warn('올리기전용 folder not found under guest root, skipping discovery')
-      return result
-    }
-
-    this.logger.info('Found 올리기전용 folder', {
-      folderId: uploadRoot.folderId,
-      folderName: uploadRoot.folderName,
-    })
-
-    // Step 3: Get company sub-folders under 올리기전용
-    let subFolders: LGUplusFolderItem[]
-    try {
-      subFolders = await this.lguplus.getSubFolders(uploadRoot.folderId)
-    } catch (error) {
-      this.logger.error('Failed to get sub-folders of 올리기전용', error as Error)
-      return result
-    }
-
-    result.total = subFolders.length
-
-    // Step 3: 기존 폴더 / 새 폴더 분리
-    const newEntries: LGUplusFolderItem[] = []
-
-    for (const folder of subFolders) {
-      const lguplusFolderId = String(folder.folderId)
-      const existing = this.state.getFolderByLguplusId(lguplusFolderId)
-
-      if (existing) {
-        if (existing.lguplus_folder_name !== folder.folderName) {
-          this.state.updateFolder(existing.id, {
-            lguplus_folder_name: folder.folderName,
-            company_name: folder.folderName,
-          })
-        }
-
-        result.existingFolders++
-        result.folders.push({
-          id: existing.id,
-          lguplusFolderId,
-          folderName: folder.folderName,
-          isNew: false,
-        })
-      } else {
-        newEntries.push(folder)
-      }
-    }
-
-    // Step 4: 새 폴더들은 병렬 처리 (concurrency=3)
-    const CONCURRENCY = 3
-    for (let i = 0; i < newEntries.length; i += CONCURRENCY) {
-      const batch = newEntries.slice(i, i + CONCURRENCY)
-      const batchResults = await Promise.allSettled(
-        batch.map((folder) => this.processNewFolder(folder)),
-      )
-
-      for (const batchResult of batchResults) {
-        if (batchResult.status === 'fulfilled' && batchResult.value) {
-          result.newFolders++
-          result.folders.push(batchResult.value)
-        }
-      }
-    }
+    // Step 2: 게스트 폴더 전체 재귀 탐색
+    await this.discoverRecursive(rootId, '', result)
 
     this.logger.info('Folder discovery completed', {
       total: result.total,
@@ -124,17 +60,82 @@ export class FolderDiscovery {
     return result
   }
 
+  /** 폴더를 재귀적으로 탐색하며 모든 하위 폴더를 DB에 등록 */
+  private async discoverRecursive(
+    parentId: number,
+    parentPath: string,
+    result: DiscoveryResult,
+  ): Promise<void> {
+    let subFolders: LGUplusFolderItem[]
+    try {
+      subFolders = await this.lguplus.getSubFolders(parentId)
+    } catch (error) {
+      this.logger.error(`Failed to get sub-folders of ${parentId}`, error as Error)
+      return
+    }
+
+    // 현재 레벨 폴더 등록/업데이트
+    const newEntries: Array<{ folder: LGUplusFolderItem; path: string }> = []
+
+    for (const folder of subFolders) {
+      const lguplusFolderId = String(folder.folderId)
+      const folderPath = parentPath ? `${parentPath}/${folder.folderName}` : `/${folder.folderName}`
+      const existing = this.state.getFolderByLguplusId(lguplusFolderId)
+
+      if (existing) {
+        if (existing.lguplus_folder_name !== folder.folderName) {
+          this.state.updateFolder(existing.id, {
+            lguplus_folder_name: folder.folderName,
+            company_name: folder.folderName,
+          })
+        }
+        result.existingFolders++
+        result.total++
+        result.folders.push({
+          id: existing.id,
+          lguplusFolderId,
+          folderName: folder.folderName,
+          isNew: false,
+        })
+      } else {
+        newEntries.push({ folder, path: folderPath })
+      }
+    }
+
+    // 신규 폴더 병렬 등록 (concurrency=3)
+    const CONCURRENCY = 3
+    for (let i = 0; i < newEntries.length; i += CONCURRENCY) {
+      const batch = newEntries.slice(i, i + CONCURRENCY)
+      const batchResults = await Promise.allSettled(
+        batch.map(({ folder, path }) => this.processNewFolder(folder, path)),
+      )
+      for (const batchResult of batchResults) {
+        if (batchResult.status === 'fulfilled' && batchResult.value) {
+          result.newFolders++
+          result.total++
+          result.folders.push(batchResult.value)
+        }
+      }
+    }
+
+    // 하위 폴더 재귀 탐색
+    for (const folder of subFolders) {
+      const folderPath = parentPath ? `${parentPath}/${folder.folderName}` : `/${folder.folderName}`
+      await this.discoverRecursive(folder.folderId, folderPath, result)
+    }
+  }
+
   private async processNewFolder(
     folder: LGUplusFolderItem,
+    folderPath: string,
   ): Promise<{ id: string; lguplusFolderId: string; folderName: string; isNew: boolean }> {
     const lguplusFolderId = String(folder.folderId)
 
+    // 자체웹하드 폴더 생성: 경로 세그먼트로 분할
     let selfWebhardPath: string | null = null
     try {
-      const ensureResult = await this.uploader.ensureFolderPath([
-        '올리기전용',
-        folder.folderName,
-      ])
+      const segments = folderPath.split('/').filter(Boolean)
+      const ensureResult = await this.uploader.ensureFolderPath(segments)
       if (ensureResult.success && ensureResult.data) {
         selfWebhardPath = ensureResult.data
       }
@@ -148,7 +149,7 @@ export class FolderDiscovery {
     const id = this.state.saveFolder({
       lguplus_folder_id: lguplusFolderId,
       lguplus_folder_name: folder.folderName,
-      lguplus_folder_path: `/올리기전용/${folder.folderName}`,
+      lguplus_folder_path: folderPath,
       self_webhard_path: selfWebhardPath,
       company_name: folder.folderName,
       enabled: true,
@@ -157,6 +158,7 @@ export class FolderDiscovery {
 
     this.logger.info(`Discovered new folder: ${folder.folderName}`, {
       lguplusFolderId,
+      folderPath,
       selfWebhardPath,
     })
 

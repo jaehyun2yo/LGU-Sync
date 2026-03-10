@@ -61,6 +61,12 @@ export interface DownloadResult {
 
 export type ProgressCallback = (downloadedBytes: number, totalBytes: number) => void
 
+export interface CreateFolderResult {
+  success: boolean
+  resultCode: string
+  resultMsg: string
+}
+
 export interface ILGUplusClient {
   // Auth
   login(userId: string, password: string): Promise<LoginResult>
@@ -69,10 +75,13 @@ export interface ILGUplusClient {
   validateSession(): Promise<boolean>
   refreshSession(): Promise<boolean>
 
-  // Folders
+  // Folders (read)
   getGuestFolderRootId(): Promise<number | null>
   getSubFolders(folderId: number): Promise<LGUplusFolderItem[]>
   findFolderByName(parentId: number, name: string): Promise<number | null>
+
+  // Folders (write) — guest folders only support creation
+  createFolder(parentId: number, name: string): Promise<CreateFolderResult>
 
   // Files
   getFileList(
