@@ -1,6 +1,33 @@
 // src/core/types/config.types.ts — [SPEC] Configuration manager contract
 // SDD Level 2: IConfigManager interface
 
+// ── Notification config types ──
+
+export type NotificationEventType =
+  | 'file-detected'
+  | 'file-completed'
+  | 'sync-failed'
+  | 'sync-completed'
+  | 'session-expired'
+
+export interface EventNotificationRule {
+  sound: boolean
+  inApp: boolean
+  toast: boolean
+}
+
+export type SoundPresetId = 'default' | 'chime' | 'bell' | 'pop' | 'ding'
+
+export interface NotificationConfig {
+  enabled: boolean
+  sound: { enabled: boolean; preset: SoundPresetId; volume: number }
+  toast: { enabled: boolean; durationMs: number; maxVisible: number }
+  inApp: { enabled: boolean }
+  rules: Record<NotificationEventType, EventNotificationRule>
+}
+
+// ── App config ──
+
 export interface AppConfig {
   lguplus: {
     username: string
@@ -18,10 +45,7 @@ export interface AppConfig {
     maxConcurrentUploads: number
     snapshotIntervalMin: number
   }
-  notification: {
-    inApp: boolean
-    toast: boolean
-  }
+  notification: NotificationConfig
   system: {
     autoStart: boolean
     startMinimized: boolean

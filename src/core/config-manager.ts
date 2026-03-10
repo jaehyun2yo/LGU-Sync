@@ -1,5 +1,13 @@
 import { z } from 'zod'
-import type { IConfigManager, AppConfig } from './types/config.types'
+import type { IConfigManager, AppConfig, NotificationConfig } from './types/config.types'
+
+const DEFAULT_NOTIFICATION_RULES: NotificationConfig['rules'] = {
+  'file-detected': { sound: true, inApp: true, toast: true },
+  'file-completed': { sound: false, inApp: true, toast: false },
+  'sync-failed': { sound: true, inApp: true, toast: true },
+  'sync-completed': { sound: false, inApp: true, toast: false },
+  'session-expired': { sound: true, inApp: true, toast: true },
+}
 
 export const DEFAULT_CONFIG: AppConfig = {
   lguplus: {
@@ -19,8 +27,11 @@ export const DEFAULT_CONFIG: AppConfig = {
     snapshotIntervalMin: 10,
   },
   notification: {
-    inApp: true,
-    toast: true,
+    enabled: true,
+    sound: { enabled: true, preset: 'default', volume: 70 },
+    toast: { enabled: true, durationMs: 5000, maxVisible: 5 },
+    inApp: { enabled: true },
+    rules: DEFAULT_NOTIFICATION_RULES,
   },
   system: {
     autoStart: false,
@@ -29,6 +40,34 @@ export const DEFAULT_CONFIG: AppConfig = {
     logRetentionDays: 30,
   },
 }
+
+const EventNotificationRuleSchema = z.object({
+  sound: z.boolean(),
+  inApp: z.boolean(),
+  toast: z.boolean(),
+})
+
+const NotificationConfigSchema = z.object({
+  enabled: z.boolean(),
+  sound: z.object({
+    enabled: z.boolean(),
+    preset: z.enum(['default', 'chime', 'bell', 'pop', 'ding']),
+    volume: z.number().int().min(0).max(100),
+  }),
+  toast: z.object({
+    enabled: z.boolean(),
+    durationMs: z.number().int().min(1000).max(30000),
+    maxVisible: z.number().int().min(1).max(10),
+  }),
+  inApp: z.object({ enabled: z.boolean() }),
+  rules: z.object({
+    'file-detected': EventNotificationRuleSchema,
+    'file-completed': EventNotificationRuleSchema,
+    'sync-failed': EventNotificationRuleSchema,
+    'sync-completed': EventNotificationRuleSchema,
+    'session-expired': EventNotificationRuleSchema,
+  }),
+})
 
 const AppConfigSchema = z.object({
   lguplus: z.object({
@@ -47,10 +86,7 @@ const AppConfigSchema = z.object({
     maxConcurrentUploads: z.number().int().positive(),
     snapshotIntervalMin: z.number().int().positive(),
   }),
-  notification: z.object({
-    inApp: z.boolean(),
-    toast: z.boolean(),
-  }),
+  notification: NotificationConfigSchema,
   system: z.object({
     autoStart: z.boolean(),
     startMinimized: z.boolean(),

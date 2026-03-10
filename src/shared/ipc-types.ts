@@ -3,6 +3,7 @@
 
 import type { SyncFileStatus, SyncStatusType } from '../core/types/sync-status.types'
 import type { LogLevel } from '../core/types/logger.types'
+import type { NotificationConfig } from '../core/types/config.types'
 
 // ── Common types ──
 
@@ -195,6 +196,8 @@ export interface ChartData {
 
 // ── Settings types ──
 
+export type { NotificationConfig } from '../core/types/config.types'
+
 export interface AppSettings {
   lguplus: { username: string; password: string }
   webhard: { apiUrl: string; apiKey: string }
@@ -204,7 +207,7 @@ export interface AppSettings {
     maxConcurrentUploads: number
     snapshotIntervalMin: number
   }
-  notification: { inApp: boolean; toast: boolean }
+  notification: NotificationConfig
   system: {
     autoStart: boolean
     tempDownloadPath: string
