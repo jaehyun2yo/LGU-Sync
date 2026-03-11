@@ -9,6 +9,7 @@ import {
   ChevronRight,
   DatabaseBackup,
   FlaskConical,
+  Radio,
   RefreshCw,
   ArrowDown,
   ArrowUp,
@@ -32,7 +33,8 @@ const mainNav: NavItem[] = [
   { id: 'sync-log', label: '동기화 로그', icon: ScrollText, shortcut: 'Ctrl+4' },
   { id: 'statistics', label: '통계', icon: BarChart3, shortcut: 'Ctrl+5' },
   { id: 'migration', label: '마이그레이션', icon: DatabaseBackup, shortcut: 'Ctrl+6' },
-  { id: 'test', label: '테스트', icon: FlaskConical, shortcut: 'Ctrl+7' },
+  { id: 'realtime-detection', label: '실시간 감지', icon: Radio, shortcut: 'Ctrl+7' },
+  { id: 'test', label: '테스트', icon: FlaskConical, shortcut: 'Ctrl+8' },
 ]
 
 const bottomNav: NavItem[] = [

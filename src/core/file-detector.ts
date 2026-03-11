@@ -12,8 +12,11 @@ const VALID_OPER_CODES = new Set<string>([
   'UP', 'D', 'MV', 'RN', 'CP', 'FC', 'FD', 'FMV', 'FRN', 'DN',
 ])
 
-/** 다중 페이지 조회 시 최대 페이지 수 */
-const MAX_POLL_PAGES = 10
+export { cleanFolderPath } from './path-utils'
+import { cleanFolderPath } from './path-utils'
+
+/** 다중 페이지 조회 시 최대 페이지 수 (최대 1000건 감지 가능) */
+const MAX_POLL_PAGES = 50
 
 /** 에러 백오프 임계값 */
 const BACKOFF_FAILURE_THRESHOLD = 5
@@ -37,6 +40,8 @@ export class FileDetector implements IFileDetector {
   private handlers: DetectionHandler[] = []
   private consecutiveFailures = 0
   private isPolling = false
+  private _isRunning = false
+  private _includeExistingOnFirstPoll = false
 
   constructor(
     client: ILGUplusClient,
@@ -56,6 +61,7 @@ export class FileDetector implements IFileDetector {
   start(): void {
     if (this.pollingTimer) return
 
+    this._isRunning = true
     this.logger.info('Starting file detector', {
       intervalMs: this.pollingIntervalMs,
     })
@@ -67,6 +73,7 @@ export class FileDetector implements IFileDetector {
   }
 
   stop(): void {
+    this._isRunning = false
     if (this.pollingTimer) {
       clearInterval(this.pollingTimer)
       this.pollingTimer = null
@@ -81,6 +88,16 @@ export class FileDetector implements IFileDetector {
       this.stop()
       this.start()
     }
+  }
+
+  /** 감지 서비스 실행 여부 */
+  get isRunning(): boolean {
+    return this._isRunning
+  }
+
+  /** 다음 첫 폴링에서 기존 파일도 감지하도록 설정 (1회성) */
+  setIncludeExistingOnFirstPoll(): void {
+    this._includeExistingOnFirstPoll = true
   }
 
   async forceCheck(): Promise<DetectedFile[]> {
@@ -111,6 +128,24 @@ export class FileDetector implements IFileDetector {
           : 0
         this.state.saveCheckpoint('last_history_no', String(maxNo))
         this.logger.info('Polling baseline established', { maxHistoryNo: maxNo })
+
+        // _includeExistingOnFirstPoll 플래그가 설정되었으면 기존 파일도 감지
+        if (this._includeExistingOnFirstPoll && firstPage.items.length > 0) {
+          this._includeExistingOnFirstPoll = false // 1회성
+          const validItems = firstPage.items.filter(
+            (item) => !EXCLUDED_OPER_CODES.has(item.itemOperCode),
+          )
+          if (validItems.length > 0) {
+            const detectedFiles = validItems.map((item) => this.toDetectedFile(item))
+            this.notifyDetection(detectedFiles, 'polling')
+            this.logger.info(`Initial detection: ${detectedFiles.length} existing files`, {
+              count: detectedFiles.length,
+            })
+            this.onPollSuccess()
+            return detectedFiles
+          }
+        }
+
         this.onPollSuccess()
         return []
       }
@@ -135,8 +170,8 @@ export class FileDetector implements IFileDetector {
         discoveredCount: allHistoryItems.filter((i) => i.historyNo > lastNo).length,
       })
 
-      // 2페이지 이상 필요하고, 첫 페이지에서 lastNo 초과 항목이 있으면 추가 페이지 조회
-      if (totalPages > 1 && firstPage.items.some((i) => i.historyNo > lastNo)) {
+      // 2페이지 이상 필요하면 추가 조회 (모든 페이지를 스캔하여 감지 누락 방지)
+      if (totalPages > 1) {
         for (let page = 2; page <= totalPages; page++) {
           const pageResult = await this.client.getUploadHistory({ operCode: '', page })
           allHistoryItems.push(...pageResult.items)
@@ -148,9 +183,6 @@ export class FileDetector implements IFileDetector {
             totalPages,
             discoveredCount: allHistoryItems.filter((i) => i.historyNo > lastNo).length,
           })
-
-          // 이 페이지의 모든 항목이 lastNo 이하이면 더 이상 조회 불필요
-          if (pageResult.items.every((i) => i.historyNo <= lastNo)) break
         }
       }
 
@@ -198,22 +230,20 @@ export class FileDetector implements IFileDetector {
     const isFolderOp = ['FC', 'FD', 'FMV', 'FRN'].includes(item.itemOperCode)
 
     let fileName: string
-    let filePath: string
 
-    if (isFolderOp) {
+    if (isFolderOp || !item.itemSrcExtension) {
       fileName = item.itemSrcName
-      filePath = `${item.itemFolderFullpath}${item.itemSrcName}`
-    } else if (!item.itemSrcExtension) {
-      // 확장자가 비어있으면 이름만 사용
-      fileName = item.itemSrcName
-      filePath = `${item.itemFolderFullpath}${item.itemSrcName}`
     } else {
       // itemSrcName이 이미 해당 확장자로 끝나는지 검사 (대소문자 무시)
       const extSuffix = `.${item.itemSrcExtension}`
       const alreadyHasExt = item.itemSrcName.toLowerCase().endsWith(extSuffix.toLowerCase())
       fileName = alreadyHasExt ? item.itemSrcName : `${item.itemSrcName}.${item.itemSrcExtension}`
-      filePath = `${item.itemFolderFullpath}${fileName}`
     }
+
+    // 디렉토리 경로 해결: API의 itemFolderFullpath가 "/" 또는 빈 값이면
+    // DB에서 실제 폴더 경로를 조회하여 사용
+    const folderPath = this.resolveFolderPath(item)
+    const filePath = `${folderPath}${fileName}`
 
     // operCode 런타임 검증
     const operCode: OperCode = VALID_OPER_CODES.has(item.itemOperCode)
@@ -229,6 +259,33 @@ export class FileDetector implements IFileDetector {
       folderId: String(item.itemFolderId),
       operCode,
     }
+  }
+
+  /**
+   * API의 itemFolderFullpath가 유효하면 그대로 사용,
+   * "/" 또는 비어있으면 DB의 sync_folders.lguplus_folder_path를 조회.
+   * 최종 반환값은 항상 "/" 로 끝남.
+   */
+  private resolveFolderPath(item: UploadHistoryItem): string {
+    const apiPath = item.itemFolderFullpath?.trim()
+
+    // API 경로가 유효하면 사용 (루트 "/" 만 있는 경우 제외)
+    if (apiPath && apiPath !== '/') {
+      return cleanFolderPath(apiPath)
+    }
+
+    // DB에서 폴더 경로 조회
+    const folder = this.state.getFolderByLguplusId(String(item.itemFolderId))
+    if (folder?.lguplus_folder_path) {
+      return cleanFolderPath(folder.lguplus_folder_path)
+    }
+
+    // 폴백: 루트 경로 사용
+    this.logger.warn('Could not resolve folder path, using root', {
+      folderId: item.itemFolderId,
+      apiPath: item.itemFolderFullpath,
+    })
+    return '/'
   }
 
   /** 폴링 성공 시 실패 카운터 리셋 및 간격 복원 */

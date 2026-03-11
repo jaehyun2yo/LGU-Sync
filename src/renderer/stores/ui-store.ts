@@ -7,6 +7,7 @@ export type PageId =
   | 'sync-log'
   | 'statistics'
   | 'migration'
+  | 'realtime-detection'
   | 'test'
   | 'settings'
 

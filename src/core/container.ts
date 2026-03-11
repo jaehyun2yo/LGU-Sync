@@ -9,6 +9,7 @@ import type { IFileDetector } from './types/file-detector.types'
 import type { INotificationService } from './types/notification.types'
 import type { ISyncEngine } from './types/sync-engine.types'
 import type { IFolderTreeCache, IFolderDiscovery } from './types/folder.types'
+import type { IDetectionService } from './detection-service'
 
 import { EventBus } from './event-bus'
 import { Logger } from './logger'
@@ -23,6 +24,7 @@ import { NotificationService } from './notification-service'
 import { SyncEngine } from './sync-engine'
 import { FolderDiscovery } from './folder-discovery'
 import { FolderTreeCache } from './folder-tree-cache'
+import { DetectionService } from './detection-service'
 
 export interface CoreOptions {
   dbPath: string
@@ -42,6 +44,7 @@ export interface CoreServices {
   engine: ISyncEngine
   folderDiscovery: IFolderDiscovery
   folderCache: IFolderTreeCache
+  detectionService: IDetectionService
 }
 
 export function createCoreServices(options: CoreOptions): CoreServices {
@@ -105,6 +108,16 @@ export function createCoreServices(options: CoreOptions): CoreServices {
 
   const folderDiscovery = new FolderDiscovery(lguplus, uploader, state, logger)
 
+  const detectionService = new DetectionService({
+    engine,
+    detector,
+    state,
+    eventBus,
+    config,
+    logger,
+    folderDiscovery,
+  })
+
   // Inject DLQ dependencies for batch retry
   retry.setDlqDeps({
     getDlqItems: () => state.getDlqItems(),
@@ -125,5 +138,6 @@ export function createCoreServices(options: CoreOptions): CoreServices {
     engine,
     folderDiscovery,
     folderCache,
+    detectionService,
   }
 }

@@ -321,10 +321,13 @@ describe('Pipeline Integration: FileDetector → SyncEngine → LGUplusClient', 
       detector._emit([makeDetectedFile()])
       await vi.advanceTimersByTimeAsync(100)
 
+      // classifyDownloadError가 SyncAppError(DL_TRANSFER_FAILED)를 한글 분류 메시지로 변환
       expect(state.updateFileStatus).toHaveBeenCalledWith(
         expect.any(String),
         'dl_failed',
-        expect.objectContaining({ last_error: 'network timeout' }),
+        expect.objectContaining({
+          last_error: expect.stringContaining('전송 실패'),
+        }),
       )
     })
   })

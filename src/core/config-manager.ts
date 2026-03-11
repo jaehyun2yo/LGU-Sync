@@ -38,6 +38,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     startMinimized: false,
     tempDownloadPath: './downloads',
     logRetentionDays: 30,
+    autoDetection: true,
+    watchFolderIds: [],
   },
 }
 
@@ -92,6 +94,8 @@ const AppConfigSchema = z.object({
     startMinimized: z.boolean(),
     tempDownloadPath: z.string().min(1),
     logRetentionDays: z.number().int().positive(),
+    autoDetection: z.boolean(),
+    watchFolderIds: z.array(z.string()),
   }),
 })
 

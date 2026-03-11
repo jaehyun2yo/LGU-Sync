@@ -18,6 +18,7 @@ import type {
   QueryOptions,
   FolderChangeRow,
   FolderChangeInsert,
+  DetectionSessionRow,
 } from '../db/types'
 import type { SyncFileStatus } from './sync-status.types'
 
@@ -63,6 +64,34 @@ export interface IStateManager {
   saveFolderChange(change: FolderChangeInsert): number
   getFolderChanges(options?: { status?: string; limit?: number }): FolderChangeRow[]
   updateFolderChange(id: number, data: { status: string; processed_at?: string }): void
+
+  // Detection Sessions
+  createDetectionSession(data: {
+    start_source: string
+    start_history_no: number | null
+  }): string
+  endDetectionSession(id: string, data: {
+    stop_reason: string
+    files_detected: number
+    files_downloaded: number
+    files_failed: number
+    last_history_no: number | null
+  }): void
+  updateDetectionSession(id: string, data: {
+    files_detected?: number
+    files_downloaded?: number
+    files_failed?: number
+    last_history_no?: number | null
+  }): void
+  getLastDetectionSession(): DetectionSessionRow | null
+  getDetectionSessions(options?: {
+    page?: number
+    pageSize?: number
+  }): { items: DetectionSessionRow[]; total: number }
+
+  // Downloads reset
+  /** 다운로드된 파일들의 download_path를 초기화하고 status를 detected로 리셋 */
+  resetDownloadedFiles(): number
 
   // Lifecycle
   initialize(): void

@@ -51,6 +51,10 @@ export interface AppConfig {
     startMinimized: boolean
     tempDownloadPath: string
     logRetentionDays: number
+    /** 앱 시작 시 자동으로 실시간 감지를 시작할지 여부 */
+    autoDetection: boolean
+    /** OS 알림을 받을 폴더 ID 목록 */
+    watchFolderIds: string[]
   }
 }
 

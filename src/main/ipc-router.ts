@@ -1,13 +1,14 @@
-import { BrowserWindow, ipcMain, shell } from 'electron'
-import { writeFile, mkdir } from 'node:fs/promises'
+import { BrowserWindow, ipcMain, shell, Notification } from 'electron'
+import { writeFile, mkdir, rm, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { CoreServices } from '../core/container'
-import type { ApiResponse, IpcEventMap, MigrationFolderInfo, RealtimeTestStartRequest, RealtimeTestEvent } from '../shared/ipc-types'
+import type { ApiResponse, IpcEventMap, MigrationFolderInfo, RealtimeTestStartRequest, RealtimeTestEvent, DetectionStartRequest, DetectionEventPush } from '../shared/ipc-types'
 import type { ILGUplusClient, LGUplusFolderItem, LGUplusFileItem } from '../core/types/lguplus-client.types'
 import type { LogRow, LogQuery, SyncFolderRow } from '../core/db/types'
 import type { DetectedFile, DetectionStrategy } from '../core/types/events.types'
+import { EXCLUDED_PATH_SEGMENTS, filterPathSegments } from '../core/path-utils'
 
 function ok<T>(data: T): ApiResponse<T> {
   return { success: true, data, timestamp: new Date().toISOString() }
@@ -166,8 +167,11 @@ async function collectAllFolderPaths(
       return
     }
     for (const sf of subFolders) {
-      const folderPath = currentPath ? `${currentPath}/${sf.folderName}` : sf.folderName
-      paths.push(folderPath)
+      const safeName = EXCLUDED_PATH_SEGMENTS.has(sf.folderName) ? '' : sf.folderName
+      const folderPath = currentPath
+        ? (safeName ? `${currentPath}/${safeName}` : currentPath)
+        : safeName
+      if (folderPath && folderPath !== currentPath) paths.push(folderPath)
       await recurse(sf.folderId, folderPath, depth + 1)
     }
   }
@@ -849,16 +853,21 @@ export function registerIpcHandlers(services: CoreServices): void {
 
         // Create empty folder structure locally (use configured download path)
         const tempPath = config.get('system').tempDownloadPath
-        const folderBasePath = join(tempPath, folder.folderName)
-        await mkdir(folderBasePath, { recursive: true })
+        // GUEST 필터링 적용
+        const cleanFolderName = EXCLUDED_PATH_SEGMENTS.has(folder.folderName) ? '' : folder.folderName
+        if (cleanFolderName) {
+          await mkdir(join(tempPath, cleanFolderName), { recursive: true })
+        }
 
         const subPaths = await collectAllFolderPaths(
           folder.lguplusFolderId,
           lguplus,
-          folder.folderName,
+          cleanFolderName,
         )
         for (const subPath of subPaths) {
-          await mkdir(join(tempPath, subPath), { recursive: true })
+          if (subPath) {
+            await mkdir(join(tempPath, subPath), { recursive: true })
+          }
         }
 
         // Scan and download files
@@ -908,10 +917,11 @@ export function registerIpcHandlers(services: CoreServices): void {
           }
 
           // Reuse existing DB record if present (avoid duplicates), otherwise create new
+          const pathPrefix = cleanFolderName ? `/${cleanFolderName}` : ''
           const fileId = existing?.id ?? state.saveFile({
             folder_id: folder.dbFolderId!,
             file_name: file.itemName,
-            file_path: `/${folder.folderName}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
+            file_path: `${pathPrefix}/${file.relativePath ? `${file.relativePath}/` : ''}${file.itemName}`,
             file_size: file.itemSize,
             file_extension: file.itemExtension,
             lguplus_file_id: String(file.itemId),
@@ -1185,6 +1195,38 @@ export function registerIpcHandlers(services: CoreServices): void {
     }
   })
 
+  ipcMain.handle('test:clear-downloads', async () => {
+    try {
+      // 동기화 중이면 거부
+      if (engine.status === 'syncing') {
+        return fail('ENGINE_RUNNING', '동기화가 진행 중입니다. 중지 후 다시 시도해주세요.')
+      }
+
+      const downloadPath = config.get('system').tempDownloadPath
+
+      if (!existsSync(downloadPath)) {
+        return ok({ deletedFiles: 0, deletedFolders: 0, resetRecords: 0 })
+      }
+
+      const entries = await readdir(downloadPath, { withFileTypes: true })
+      let deletedFiles = 0
+      let deletedFolders = 0
+
+      for (const entry of entries) {
+        const entryPath = join(downloadPath, entry.name)
+        await rm(entryPath, { recursive: true, force: true })
+        if (entry.isDirectory()) deletedFolders++
+        else deletedFiles++
+      }
+
+      const resetRecords = state.resetDownloadedFiles()
+
+      return ok({ deletedFiles, deletedFolders, resetRecords })
+    } catch (e) {
+      return fail('TEST_CLEAR_DOWNLOADS_FAILED', (e as Error).message)
+    }
+  })
+
   // ── Realtime detection test ──
 
   let realtimeTestRunning = false
@@ -1283,6 +1325,138 @@ export function registerIpcHandlers(services: CoreServices): void {
     }
   })
 
+  // ── Detection (실시간 감지 서비스) ──
+
+  ipcMain.handle('detection:start', async (_event, request) => {
+    try {
+      const { source } = request
+      await services.detectionService.start(source)
+      return ok(undefined)
+    } catch (e) {
+      return fail('DETECTION_START_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('detection:stop', async () => {
+    try {
+      await services.detectionService.stop('manual')
+      return ok(undefined)
+    } catch (e) {
+      return fail('DETECTION_STOP_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('detection:status', async () => {
+    try {
+      const detSvc = services.detectionService
+      const stats = detSvc.getSessionStats()
+      const sessionId = detSvc.currentSessionId
+
+      // 현재 세션 정보 조회
+      let currentSession: {
+        filesDetected: number
+        filesDownloaded: number
+        filesFailed: number
+        startedAt: string
+        lastHistoryNo: number | null
+      } | null = null
+
+      if (sessionId) {
+        const lastSession = state.getLastDetectionSession()
+        currentSession = {
+          filesDetected: stats.filesDetected,
+          filesDownloaded: stats.filesDownloaded,
+          filesFailed: stats.filesFailed,
+          startedAt: lastSession?.started_at ?? new Date().toISOString(),
+          lastHistoryNo: lastSession?.last_history_no ?? null,
+        }
+      }
+
+      const autoStartEnabled = config.get('system').autoDetection
+
+      return ok({
+        status: detSvc.status,
+        currentSessionId: sessionId,
+        currentSession,
+        lastPollAt: null, // TODO: expose from FileDetector if needed
+        autoStartEnabled,
+      })
+    } catch (e) {
+      return fail('DETECTION_STATUS_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('detection:sessions', async (_event, request) => {
+    try {
+      const { page = 1, pageSize = 20 } = request ?? {}
+      const { items, total } = state.getDetectionSessions({ page, pageSize })
+      return ok({
+        items: items.map((s) => ({
+          id: s.id,
+          startedAt: s.started_at,
+          stoppedAt: s.stopped_at,
+          stopReason: s.stop_reason as any,
+          filesDetected: s.files_detected,
+          filesDownloaded: s.files_downloaded,
+          filesFailed: s.files_failed,
+          lastHistoryNo: s.last_history_no,
+        })),
+        pagination: {
+          page,
+          pageSize,
+          total,
+          totalPages: Math.ceil(total / pageSize) || 1,
+          hasNext: page * pageSize < total,
+          hasPrev: page > 1,
+        },
+      })
+    } catch (e) {
+      return fail('DETECTION_SESSIONS_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('detection:recover', async () => {
+    try {
+      const lastHistoryNoBefore = state.getCheckpoint('last_history_no')
+      const fromHistoryNo = lastHistoryNoBefore ? parseInt(lastHistoryNoBefore, 10) : 0
+
+      const result = await services.detectionService.recover()
+
+      const lastHistoryNoAfter = state.getCheckpoint('last_history_no')
+      const toHistoryNo = lastHistoryNoAfter ? parseInt(lastHistoryNoAfter, 10) : fromHistoryNo
+
+      return ok({
+        recoveredFiles: result.recoveredFiles,
+        failedFiles: result.failedFiles,
+        fromHistoryNo,
+        toHistoryNo,
+      })
+    } catch (e) {
+      return fail('DETECTION_RECOVER_FAILED', (e as Error).message)
+    }
+  })
+
+  // ── Watch folders ──
+
+  ipcMain.handle('detection:set-watch-folders', async (_event, request) => {
+    try {
+      const { folderIds } = request
+      config.set('system', { watchFolderIds: folderIds })
+      return ok(undefined)
+    } catch (e) {
+      return fail('SET_WATCH_FOLDERS_FAILED', (e as Error).message)
+    }
+  })
+
+  ipcMain.handle('detection:get-watch-folders', async () => {
+    try {
+      const { watchFolderIds } = config.get('system')
+      return ok({ folderIds: watchFolderIds })
+    } catch (e) {
+      return fail('GET_WATCH_FOLDERS_FAILED', (e as Error).message)
+    }
+  })
+
   // ── Notifications ──
 
   ipcMain.handle('notification:getAll', async () => {
@@ -1337,6 +1511,20 @@ export function bridgeEventsToRenderer(
     }
   }
 
+  /** DetectionService 통계를 가져오는 헬퍼 */
+  function getDetectionStats(): DetectionEventPush['stats'] | undefined {
+    const detSvc = services.detectionService
+    if (detSvc.status === 'running' || detSvc.status === 'stopping') {
+      const stats = detSvc.getSessionStats()
+      return {
+        filesDetected: stats.filesDetected,
+        filesDownloaded: stats.filesDownloaded,
+        filesFailed: stats.filesFailed,
+      }
+    }
+    return undefined
+  }
+
   const handlers = {
     'engine:status': (data: { prev: string; next: string }) => {
       send('sync:status-changed', {
@@ -1367,6 +1555,17 @@ export function bridgeEventsToRenderer(
         direction: 'upload',
         durationMs: data.durationMs,
       })
+
+      // detection:event — 다운로드+업로드 완료
+      send('detection:event', {
+        type: 'downloaded',
+        message: `동기화 완료 (${(data.fileSize / 1024).toFixed(1)}KB, ${(data.durationMs / 1000).toFixed(1)}초)`,
+        timestamp: new Date().toISOString(),
+        fileName: data.fileName,
+        filePath: data.folderPath,
+        sessionId: services.detectionService.currentSessionId ?? undefined,
+        stats: getDetectionStats(),
+      })
     },
     'sync:completed': (data: { totalFiles: number; totalBytes: number; durationMs: number }) => {
       send('sync:progress', {
@@ -1380,13 +1579,30 @@ export function bridgeEventsToRenderer(
       })
     },
     'sync:failed': (data: { error: any; fileId?: string }) => {
+      // DB에서 실제 파일 정보 조회 (UUID 폴백 방지)
+      const fileInfo = data.fileId ? services.state.getFile(data.fileId) : null
+      const fileName = fileInfo?.file_name ?? data.error?.context?.fileName ?? ''
+      const filePath = fileInfo?.file_path ?? data.error?.context?.filePath
+
       send('sync:file-failed', {
         fileId: data.fileId ?? '',
-        fileName: '',
+        fileName: fileName,
         error: data.error?.message ?? 'Unknown error',
         errorCode: data.error?.code ?? 'UNKNOWN',
         retryCount: 0,
         willRetry: data.error?.retryable ?? false,
+      })
+
+      // detection:event — 동기화 실패 (last_error에 이미 분류된 메시지가 있으면 우선 사용)
+      const classifiedMsg = fileInfo?.last_error ?? data.error?.message ?? 'Unknown error'
+      send('detection:event', {
+        type: 'failed',
+        message: classifiedMsg,
+        timestamp: new Date().toISOString(),
+        fileName: fileName,
+        filePath: filePath,
+        sessionId: services.detectionService.currentSessionId ?? undefined,
+        stats: getDetectionStats(),
       })
     },
     'detection:found': (data: { files: any[]; strategy: string }) => {
@@ -1400,6 +1616,62 @@ export function bridgeEventsToRenderer(
         })),
         source: data.strategy as 'polling' | 'snapshot',
       })
+
+      // detection:event — 감지된 파일마다 개별 이벤트 전송
+      const now = new Date().toISOString()
+      for (const f of data.files) {
+        send('detection:event', {
+          type: 'detected',
+          message: `${getOperCodeLabel(f.operCode)} 감지됨`,
+          timestamp: now,
+          fileName: f.fileName,
+          filePath: f.filePath,
+          operCode: f.operCode,
+          sessionId: services.detectionService.currentSessionId ?? undefined,
+          stats: getDetectionStats(),
+        })
+      }
+
+      // OS 네이티브 알림: watchFolderIds에 해당하는 폴더의 파일만
+      try {
+        const watchFolderIds = services.config.get('system').watchFolderIds
+        if (watchFolderIds.length > 0 && Notification.isSupported()) {
+          // folderId별로 파일 그룹화
+          const watchedFiles = data.files.filter((f: any) => watchFolderIds.includes(f.folderId))
+          if (watchedFiles.length > 0) {
+            const byFolder = new Map<string, { count: number; operCounts: Map<string, number> }>()
+            for (const f of watchedFiles) {
+              if (!byFolder.has(f.folderId)) {
+                byFolder.set(f.folderId, { count: 0, operCounts: new Map() })
+              }
+              const group = byFolder.get(f.folderId)!
+              group.count++
+              group.operCounts.set(f.operCode, (group.operCounts.get(f.operCode) ?? 0) + 1)
+            }
+
+            for (const [folderId, group] of byFolder) {
+              // 폴더명 조회
+              const folder = services.state.getFolder(folderId)
+                ?? services.state.getFolderByLguplusId(folderId)
+              const folderName = folder?.lguplus_folder_name ?? folderId
+
+              // operCode별 요약
+              const operSummary = Array.from(group.operCounts.entries())
+                .map(([code, cnt]) => `${getOperCodeLabel(code)} ${cnt}`)
+                .join(', ')
+
+              const notification = new Notification({
+                title: `${folderName}: 파일 ${group.count}건 변동 감지`,
+                body: operSummary,
+                silent: false,
+              })
+              notification.show()
+            }
+          }
+        }
+      } catch {
+        // OS 알림 실패 시 무시
+      }
     },
     'detection:scan-progress': (data: { phase: 'polling' | 'paginating'; currentPage: number; totalPages: number; discoveredCount: number }) => {
       send('detection:scan-progress', {
@@ -1407,6 +1679,14 @@ export function bridgeEventsToRenderer(
         currentPage: data.currentPage,
         totalPages: data.totalPages,
         discoveredCount: data.discoveredCount,
+      })
+    },
+    'detection:start-progress': (data: { step: string; message: string; current: number; total: number }) => {
+      send('detection:start-progress', {
+        step: data.step,
+        message: data.message,
+        current: data.current,
+        total: data.total,
       })
     },
     'opercode:event': (data: { operCode: string; fileName: string; filePath: string; folderId: string; historyNo?: number; timestamp: string }) => {
@@ -1419,12 +1699,48 @@ export function bridgeEventsToRenderer(
         timestamp: data.timestamp,
       })
     },
+    'detection:status-change': (data: { status: string; sessionId: string | null }) => {
+      send('detection:status-changed', {
+        status: data.status as any,
+        sessionId: data.sessionId,
+      })
+
+      // detection:event — 감지 서비스 상태 변경 로그
+      const typeMap: Record<string, DetectionEventPush['type']> = {
+        running: 'started',
+        stopped: 'stopped',
+        recovering: 'recovery',
+      }
+      const eventType = typeMap[data.status]
+      if (eventType) {
+        const messageMap: Record<string, string> = {
+          started: '실시간 감지 시작',
+          stopped: '실시간 감지 중지',
+          recovery: '다운타임 복구 시작',
+        }
+        send('detection:event', {
+          type: eventType,
+          message: messageMap[eventType],
+          timestamp: new Date().toISOString(),
+          sessionId: data.sessionId ?? undefined,
+          stats: getDetectionStats(),
+        })
+      }
+    },
     'session:expired': (data: { reason: string }) => {
       send('auth:expired', {
         service: 'lguplus',
         reason: data.reason,
         autoReloginAttempted: false,
         requiresManualAction: true,
+      })
+
+      // detection:event — 세션 만료 에러
+      send('detection:event', {
+        type: 'error',
+        message: `세션 만료: ${data.reason}`,
+        timestamp: new Date().toISOString(),
+        sessionId: services.detectionService.currentSessionId ?? undefined,
       })
     },
   }
@@ -1517,7 +1833,9 @@ export function removeAllIpcHandlers(): void {
     'files:list', 'files:detail', 'files:search',
     'folders:list', 'folders:tree', 'folders:toggle', 'folders:discover',
     'migration:scan', 'migration:start',
-    'test:scan-folders', 'test:download-only', 'test:upload-only', 'test:full-sync', 'test:open-download-folder', 'test:realtime-start', 'test:realtime-stop',
+    'test:scan-folders', 'test:download-only', 'test:upload-only', 'test:full-sync', 'test:open-download-folder', 'test:clear-downloads', 'test:realtime-start', 'test:realtime-stop',
+    'detection:start', 'detection:stop', 'detection:status', 'detection:sessions', 'detection:recover',
+    'detection:set-watch-folders', 'detection:get-watch-folders',
     'logs:list', 'logs:export',
     'stats:summary', 'stats:chart',
     'settings:get', 'settings:update', 'settings:test-connection',

@@ -1,3 +1,4 @@
+import { join, normalize } from 'node:path'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { SyncEngine } from '../../src/core/sync-engine'
 import { EventBus } from '../../src/core/event-bus'
@@ -314,7 +315,7 @@ describe('SyncEngine', () => {
 
       expect(lguplus.downloadFile).toHaveBeenCalledWith(
         5001,
-        './downloads/테스트업체/2026년/Q1/deep.dxf',
+        normalize(join('./downloads', '테스트업체', '2026년', 'Q1', 'deep.dxf')),
         expect.any(Function),
       )
     })
@@ -440,7 +441,7 @@ describe('SyncEngine', () => {
 
       expect(lguplus.downloadFile).toHaveBeenCalledWith(
         5001,
-        './downloads/회사A/프로젝트/세부/test.dxf',
+        normalize(join('./downloads', '회사A', '프로젝트', '세부', 'test.dxf')),
         expect.any(Function),
       )
     })
@@ -768,7 +769,7 @@ describe('SyncEngine', () => {
   // ── emitSyncFailed ──
 
   describe('downloadOnly 에러 메시지', () => {
-    it('다운로드 실패 시 last_error에 구체적 에러 메시지가 저장된다', async () => {
+    it('다운로드 실패 시 last_error에 분류된 에러 메시지가 저장된다', async () => {
       ;(state.getFile as ReturnType<typeof vi.fn>).mockReturnValue({
         id: 'f1', folder_id: 'folder1', file_name: 'test.dxf', file_path: '/test.dxf',
         file_size: 1024, status: 'detected', lguplus_file_id: '5001', retry_count: 0,
@@ -781,12 +782,12 @@ describe('SyncEngine', () => {
       const result = await engine.downloadOnly('f1')
 
       expect(result.success).toBe(false)
-      expect(result.error).toContain('Circuit breaker is OPEN')
+      expect(result.error).toContain('회로 차단')
       expect(state.updateFileStatus).toHaveBeenCalledWith(
         'f1',
         'dl_failed',
         expect.objectContaining({
-          last_error: expect.stringContaining('Circuit breaker is OPEN'),
+          last_error: expect.stringContaining('회로 차단'),
         }),
       )
     })
@@ -859,6 +860,87 @@ describe('SyncEngine', () => {
       const calls = (state.saveFile as ReturnType<typeof vi.fn>).mock.calls
       expect(calls.length).toBe(1)
       expect(calls[0][0].file_name).toBe('known-folder.dxf')
+    })
+  })
+
+  // ── GUEST 경로 필터링 ──
+
+  describe('getPathSegments GUEST filtering', () => {
+    function setupFileWithPath(filePath: string) {
+      const fileId = 'file-guest-test'
+      const fileData = {
+        id: fileId,
+        folder_id: 'f1',
+        file_name: filePath.split('/').pop()!,
+        file_path: filePath,
+        file_size: 1024,
+        status: 'detected',
+        lguplus_file_id: '5001',
+        retry_count: 0,
+      }
+      ;(state.getFile as ReturnType<typeof vi.fn>).mockImplementation(() => ({ ...fileData }))
+      ;(state.updateFileStatus as ReturnType<typeof vi.fn>).mockImplementation((_id, status, extra) => {
+        fileData.status = status
+        if (extra && typeof extra === 'object') Object.assign(fileData, extra)
+      })
+      return { fileId, fileData }
+    }
+
+    it('다운로드 경로에서 GUEST 세그먼트가 제거된다', async () => {
+      const { fileId } = setupFileWithPath('/올리기전용/GUEST/업체A/파일.dxf')
+
+      ;(lguplus.downloadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, size: 1024, filename: '파일.dxf',
+      })
+
+      await engine.downloadOnly(fileId)
+
+      expect(lguplus.downloadFile).toHaveBeenCalledWith(
+        5001,
+        normalize(join('./downloads', '올리기전용', '업체A', '파일.dxf')),
+        expect.any(Function),
+      )
+    })
+
+    it('GUEST가 없는 경로는 그대로 유지된다', async () => {
+      const { fileId } = setupFileWithPath('/올리기전용/업체A/파일.dxf')
+
+      ;(lguplus.downloadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, size: 1024, filename: '파일.dxf',
+      })
+
+      await engine.downloadOnly(fileId)
+
+      expect(lguplus.downloadFile).toHaveBeenCalledWith(
+        5001,
+        normalize(join('./downloads', '올리기전용', '업체A', '파일.dxf')),
+        expect.any(Function),
+      )
+    })
+
+    it('업로드 시 ensureFolderPath에서도 GUEST가 제거된다', async () => {
+      const { fileData } = setupFileWithPath('/올리기전용/GUEST/업체B/파일.dxf')
+      fileData.status = 'downloaded'
+      ;(fileData as any).download_path = '/tmp/sync/올리기전용/업체B/파일.dxf'
+
+      ;(state.getFolder as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'f1', lguplus_folder_id: '1001', lguplus_folder_name: '올리기전용',
+        self_webhard_path: null, enabled: true,
+      })
+
+      ;(uploader.ensureFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, data: 'webhard-folder-id',
+      })
+
+      ;(uploader.uploadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true, data: { id: 'up1', name: '파일.dxf', size: 1024, folderId: 'f1', uploadedAt: '' },
+      })
+
+      await engine.uploadOnly('file-guest-test')
+
+      expect(uploader.ensureFolderPath).toHaveBeenCalledWith(
+        ['올리기전용', '업체B'],
+      )
     })
   })
 

@@ -15,6 +15,7 @@ import { StatisticsPage } from './pages/StatisticsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { MigrationPage } from './pages/MigrationPage'
 import { TestPage } from './pages/TestPage'
+import { RealtimeDetectionPage } from './pages/RealtimeDetectionPage'
 
 function PageRouter() {
   const currentPage = useUiStore((s) => s.currentPage)
@@ -33,6 +34,8 @@ function PageRouter() {
         return <StatisticsPage />
       case 'migration':
         return <MigrationPage />
+      case 'realtime-detection':
+        return <RealtimeDetectionPage />
       case 'settings':
         return <SettingsPage />
       default:
@@ -104,7 +107,8 @@ function App() {
         '4': 'sync-log',
         '5': 'statistics',
         '6': 'migration',
-        '7': 'test',
+        '7': 'realtime-detection',
+        '8': 'test',
         ',': 'settings',
       }
       const page = shortcuts[e.key]

@@ -347,6 +347,24 @@ export interface LogQuery {
   offset?: number
 }
 
+// ── detection_sessions ──
+
+export interface DetectionSessionRow {
+  id: string
+  start_source: string
+  status: string
+  started_at: string
+  stopped_at: string | null
+  stop_reason: string | null
+  files_detected: number
+  files_downloaded: number
+  files_failed: number
+  start_history_no: number | null
+  last_history_no: number | null
+  error_message: string | null
+  created_at: string
+}
+
 // ── folder_changes ──
 
 export interface FolderChangeRow {

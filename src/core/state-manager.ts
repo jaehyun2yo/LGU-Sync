@@ -20,6 +20,7 @@ import type {
   QueryOptions,
   FolderChangeRow,
   FolderChangeInsert,
+  DetectionSessionRow,
 } from './db/types'
 import { PRAGMA_INIT, ALL_CREATE_STATEMENTS, MIGRATIONS } from './db/schema'
 
@@ -504,6 +505,145 @@ export class StateManager implements IStateManager {
     this.db
       .prepare(`UPDATE folder_changes SET status = ?, processed_at = ? WHERE id = ?`)
       .run(data.status, data.processed_at ?? new Date().toISOString(), id)
+  }
+
+  // ── Detection Sessions ──
+
+  createDetectionSession(data: {
+    start_source: string
+    start_history_no: number | null
+  }): string {
+    const id = uuid()
+    this.db
+      .prepare(
+        `INSERT INTO detection_sessions (id, start_source, start_history_no)
+         VALUES (?, ?, ?)`,
+      )
+      .run(id, data.start_source, data.start_history_no)
+    return id
+  }
+
+  endDetectionSession(
+    id: string,
+    data: {
+      stop_reason: string
+      files_detected: number
+      files_downloaded: number
+      files_failed: number
+      last_history_no: number | null
+    },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE detection_sessions
+         SET stopped_at = datetime('now'),
+             status = 'completed',
+             stop_reason = ?,
+             files_detected = ?,
+             files_downloaded = ?,
+             files_failed = ?,
+             last_history_no = ?
+         WHERE id = ?`,
+      )
+      .run(
+        data.stop_reason,
+        data.files_detected,
+        data.files_downloaded,
+        data.files_failed,
+        data.last_history_no,
+        id,
+      )
+  }
+
+  updateDetectionSession(
+    id: string,
+    data: {
+      files_detected?: number
+      files_downloaded?: number
+      files_failed?: number
+      last_history_no?: number | null
+    },
+  ): void {
+    const updates: string[] = []
+    const params: unknown[] = []
+
+    if (data.files_detected !== undefined) {
+      updates.push('files_detected = ?')
+      params.push(data.files_detected)
+    }
+    if (data.files_downloaded !== undefined) {
+      updates.push('files_downloaded = ?')
+      params.push(data.files_downloaded)
+    }
+    if (data.files_failed !== undefined) {
+      updates.push('files_failed = ?')
+      params.push(data.files_failed)
+    }
+    if (data.last_history_no !== undefined) {
+      updates.push('last_history_no = ?')
+      params.push(data.last_history_no)
+    }
+
+    if (updates.length === 0) return
+    params.push(id)
+
+    this.db
+      .prepare(
+        `UPDATE detection_sessions SET ${updates.join(', ')} WHERE id = ?`,
+      )
+      .run(...params)
+  }
+
+  getLastDetectionSession(): DetectionSessionRow | null {
+    return (
+      (this.db
+        .prepare(
+          'SELECT * FROM detection_sessions ORDER BY started_at DESC LIMIT 1',
+        )
+        .get() as DetectionSessionRow | undefined) ?? null
+    )
+  }
+
+  getDetectionSessions(options?: {
+    page?: number
+    pageSize?: number
+  }): { items: DetectionSessionRow[]; total: number } {
+    const page = options?.page ?? 1
+    const pageSize = options?.pageSize ?? 20
+    const offset = (page - 1) * pageSize
+
+    const total = (
+      this.db
+        .prepare('SELECT COUNT(*) as cnt FROM detection_sessions')
+        .get() as { cnt: number }
+    ).cnt
+
+    const items = this.db
+      .prepare(
+        'SELECT * FROM detection_sessions ORDER BY started_at DESC LIMIT ? OFFSET ?',
+      )
+      .all(pageSize, offset) as DetectionSessionRow[]
+
+    return { items, total }
+  }
+
+  // ── Downloads Reset ──
+
+  resetDownloadedFiles(): number {
+    const result = this.db.prepare(`
+      UPDATE sync_files
+      SET status = 'detected',
+          download_path = NULL,
+          download_started_at = NULL,
+          download_completed_at = NULL,
+          upload_started_at = NULL,
+          upload_completed_at = NULL,
+          self_webhard_file_id = NULL,
+          updated_at = datetime('now')
+      WHERE download_path IS NOT NULL
+        AND status IN ('downloaded', 'completed', 'dl_failed')
+    `).run()
+    return result.changes
   }
 
   // ── Private Helpers ──

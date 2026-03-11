@@ -209,6 +209,26 @@ CREATE TABLE IF NOT EXISTS daily_stats (
 );
 `
 
+export const CREATE_DETECTION_SESSIONS = `
+CREATE TABLE IF NOT EXISTS detection_sessions (
+    id                TEXT PRIMARY KEY,
+    start_source      TEXT NOT NULL DEFAULT 'manual',
+    status            TEXT NOT NULL DEFAULT 'running',
+    started_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    stopped_at        TEXT,
+    stop_reason       TEXT,
+    files_detected    INTEGER NOT NULL DEFAULT 0,
+    files_downloaded  INTEGER NOT NULL DEFAULT 0,
+    files_failed      INTEGER NOT NULL DEFAULT 0,
+    start_history_no  INTEGER,
+    last_history_no   INTEGER,
+    error_message     TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ds_status ON detection_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_ds_started ON detection_sessions(started_at);
+`
+
 export const CREATE_FOLDER_CHANGES = `
 CREATE TABLE IF NOT EXISTS folder_changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,5 +267,6 @@ export const ALL_CREATE_STATEMENTS = [
   CREATE_FILE_SNAPSHOTS,
   CREATE_APP_LOGS,
   CREATE_DAILY_STATS,
+  CREATE_DETECTION_SESSIONS,
   CREATE_FOLDER_CHANGES,
 ]

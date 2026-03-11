@@ -11,4 +11,7 @@ export interface IFileDetector {
   onFilesDetected(
     handler: (files: DetectedFile[], strategy: DetectionStrategy) => void,
   ): () => void
+  readonly isRunning: boolean
+  /** 다음 첫 폴링에서 기존 파일도 감지하도록 설정 (1회성) */
+  setIncludeExistingOnFirstPoll(): void
 }

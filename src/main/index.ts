@@ -111,7 +111,7 @@ async function initialize(): Promise<void> {
     // ignore config errors
   }
 
-  // Step 8: Auto-start sync if credentials are configured
+  // Step 8: Auto-start detection if credentials are configured and autoDetection is enabled
   try {
     const lguplusConfig = coreServices.config.get('lguplus')
     if (lguplusConfig.username && lguplusConfig.password) {
@@ -120,25 +120,19 @@ async function initialize(): Promise<void> {
         lguplusConfig.password,
       )
       if (loginResult.success) {
-        // Discover LGU+ folders before starting sync
-        try {
-          const discovery = await coreServices.folderDiscovery.discoverFolders()
-          coreServices.logger.info('Folder discovery completed on startup', {
-            total: discovery.total,
-            newFolders: discovery.newFolders,
-          })
-        } catch (discoverError) {
-          coreServices.logger.warn('Folder discovery failed on startup, continuing with existing folders', {
-            error: (discoverError as Error).message,
-          })
+        const autoDetection = coreServices.config.get('system').autoDetection
+        if (autoDetection) {
+          await coreServices.detectionService.start('auto-start')
+          coreServices.logger.info('Auto-started detection service')
+        } else {
+          // autoDetection 미설정 시 기존 엔진만 시작
+          await coreServices.engine.start()
+          coreServices.logger.info('Auto-started sync engine (detection disabled)')
         }
-
-        await coreServices.engine.start()
-        coreServices.logger.info('Auto-started sync engine')
       }
     }
   } catch (error) {
-    coreServices.logger.warn('Auto-start sync failed', { error: (error as Error).message })
+    coreServices.logger.warn('Auto-start failed', { error: (error as Error).message })
   }
 
   // Step 9: Setup auto-updater and check for updates
@@ -153,13 +147,20 @@ async function initialize(): Promise<void> {
 app.on('before-quit', async (event) => {
   (app as any)._isQuitting = true
 
-  if (coreServices && coreServices.engine.status === 'syncing') {
+  const needsGracefulStop = coreServices && (
+    coreServices.detectionService.status !== 'stopped' ||
+    coreServices.engine.status === 'syncing'
+  )
+
+  if (needsGracefulStop) {
     event.preventDefault()
 
-    coreServices.logger.info('Graceful shutdown: stopping sync engine...')
+    coreServices!.logger.info('Graceful shutdown: stopping detection service...')
 
-    // Stop with 5s timeout
-    const stopPromise = coreServices.engine.stop()
+    // Stop detection service (which stops engine internally) with 5s timeout
+    const stopPromise = coreServices!.detectionService.status !== 'stopped'
+      ? coreServices!.detectionService.stop('app-quit')
+      : coreServices!.engine.stop()
     const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, 5000))
     await Promise.race([stopPromise, timeoutPromise])
 

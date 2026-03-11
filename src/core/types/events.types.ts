@@ -67,6 +67,18 @@ export interface EventMap {
   'session:expired': { reason: string }
   'session:renewed': { method: 'http' | 'playwright' }
   'engine:status': { prev: EngineStatus; next: EngineStatus }
+  /** 감지 서비스 상태 변경 */
+  'detection:status-change': {
+    status: 'stopped' | 'starting' | 'running' | 'stopping' | 'recovering'
+    sessionId: string | null
+  }
+  /** 감지 서비스 시작 단계별 진행 상태 */
+  'detection:start-progress': {
+    step: 'folder-discovery' | 'download-folders' | 'recovery' | 'session' | 'engine' | 'dlq'
+    message: string
+    current: number
+    total: number
+  }
   /** @deprecated sync:progress의 phase='downloading'으로 대체. 향후 제거 예정. */
   'download:progress': {
     fileId: string

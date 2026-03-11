@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { FileDetector } from '../../src/core/file-detector'
+import { FileDetector, cleanFolderPath } from '../../src/core/file-detector'
 import { EventBus } from '../../src/core/event-bus'
 import { Logger } from '../../src/core/logger'
 import type { ILGUplusClient, UploadHistoryResponse } from '../../src/core/types'
@@ -36,6 +36,7 @@ function createMockStateManager(): Partial<IStateManager> {
     saveCheckpoint: vi.fn(),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
     getFileByLguplusFileId: vi.fn().mockReturnValue(null),
+    getFolderByLguplusId: vi.fn().mockReturnValue(null),
     getFolders: vi.fn().mockReturnValue([]),
     getFilesByFolder: vi.fn().mockReturnValue([]),
   }
@@ -301,7 +302,7 @@ describe('FileDetector', () => {
       )
     })
 
-    it('2번째 페이지의 모든 항목이 lastNo 이하이면 조기 중단', async () => {
+    it('모든 항목이 lastNo 이하여도 전체 페이지를 모두 스캔한다', async () => {
       ;(mockState.getCheckpoint as ReturnType<typeof vi.fn>).mockReturnValue('110')
 
       const getUploadHistory = mockClient.getUploadHistory as ReturnType<typeof vi.fn>
@@ -336,37 +337,83 @@ describe('FileDetector', () => {
             itemUseDate: '2026-02-23 09:00:00',
           })),
         })
+        .mockResolvedValueOnce({
+          total: 60,
+          pageSize: 20,
+          items: Array.from({ length: 20 }, (_, i) => ({
+            historyNo: 90 - i, // 90~71 → 모두 lastNo(110) 이하
+            itemSrcNo: 5040 + i,
+            itemFolderId: 1001,
+            itemSrcName: `file${40 + i}`,
+            itemSrcExtension: 'dxf',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-02-23 08:00:00',
+          })),
+        })
 
       await detector.forceCheck()
 
-      // 2페이지까지만 조회 (3페이지 조회 안함)
-      expect(getUploadHistory).toHaveBeenCalledTimes(2)
+      // 조기 종료 없이 3페이지 전체 스캔 (감지 누락 방지)
+      expect(getUploadHistory).toHaveBeenCalledTimes(3)
     })
 
-    it('firstPage에서 lastNo 초과 항목이 없으면 추가 페이지 미조회', async () => {
+    it('모든 페이지에서 lastNo 초과 항목이 없어도 전체 페이지를 모두 스캔한다', async () => {
       ;(mockState.getCheckpoint as ReturnType<typeof vi.fn>).mockReturnValue('200')
 
       const getUploadHistory = mockClient.getUploadHistory as ReturnType<typeof vi.fn>
-      getUploadHistory.mockResolvedValueOnce({
-        total: 40,
-        pageSize: 20,
-        items: Array.from({ length: 20 }, (_, i) => ({
-          historyNo: 200 - i, // 200~181 → 모두 lastNo(200) 이하
-          itemSrcNo: 5000 + i,
-          itemFolderId: 1001,
-          itemSrcName: `file${i}`,
-          itemSrcExtension: 'dxf',
-          itemSrcType: 'file',
-          itemFolderFullpath: '/올리기전용/',
-          itemOperCode: 'UP',
-          itemUseDate: '2026-02-23 10:00:00',
-        })),
-      })
+      getUploadHistory
+        .mockResolvedValueOnce({
+          total: 60,
+          pageSize: 20,
+          items: Array.from({ length: 20 }, (_, i) => ({
+            historyNo: 200 - i, // 200~181 → 모두 lastNo(200) 이하
+            itemSrcNo: 5000 + i,
+            itemFolderId: 1001,
+            itemSrcName: `file${i}`,
+            itemSrcExtension: 'dxf',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-02-23 10:00:00',
+          })),
+        })
+        .mockResolvedValueOnce({
+          total: 60,
+          pageSize: 20,
+          items: Array.from({ length: 20 }, (_, i) => ({
+            historyNo: 180 - i, // 180~161 → 모두 lastNo(200) 이하
+            itemSrcNo: 5020 + i,
+            itemFolderId: 1001,
+            itemSrcName: `file${20 + i}`,
+            itemSrcExtension: 'dxf',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-02-23 09:00:00',
+          })),
+        })
+        .mockResolvedValueOnce({
+          total: 60,
+          pageSize: 20,
+          items: Array.from({ length: 20 }, (_, i) => ({
+            historyNo: 160 - i, // 160~141 → 모두 lastNo(200) 이하
+            itemSrcNo: 5040 + i,
+            itemFolderId: 1001,
+            itemSrcName: `file${40 + i}`,
+            itemSrcExtension: 'dxf',
+            itemSrcType: 'file',
+            itemFolderFullpath: '/올리기전용/',
+            itemOperCode: 'UP',
+            itemUseDate: '2026-02-23 08:00:00',
+          })),
+        })
 
       const files = await detector.forceCheck()
       expect(files).toHaveLength(0)
-      // 1페이지만 조회
-      expect(getUploadHistory).toHaveBeenCalledTimes(1)
+      // 조기 종료 없이 3페이지 전체 스캔
+      expect(getUploadHistory).toHaveBeenCalledTimes(3)
     })
   })
 
@@ -904,5 +951,156 @@ describe('FileDetector', () => {
       })
     })
 
+  })
+
+  // ── 첫 실행 시 기존 파일 감지 ──
+
+  describe('first poll with initial detection', () => {
+    it('should detect existing files on first poll when setIncludeExistingOnFirstPoll called', async () => {
+      ;(mockState.getCheckpoint as ReturnType<typeof vi.fn>).mockReturnValue(null)
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+        items: [
+          { historyNo: 100, itemSrcNo: 5001, itemSrcName: 'a', itemSrcExtension: 'dxf', itemFolderId: 1, itemFolderFullpath: '/올리기전용/업체A', itemOperCode: 'UP', itemUseDate: '2026-03-11' },
+          { historyNo: 101, itemSrcNo: 5002, itemSrcName: 'b', itemSrcExtension: 'dxf', itemFolderId: 1, itemFolderFullpath: '/올리기전용/업체A', itemOperCode: 'UP', itemUseDate: '2026-03-11' },
+          { historyNo: 102, itemSrcNo: 5003, itemSrcName: 'c', itemSrcExtension: 'dxf', itemFolderId: 1, itemFolderFullpath: '/올리기전용/업체A', itemOperCode: 'DN', itemUseDate: '2026-03-11' },
+        ],
+        total: 3,
+        pageSize: 20,
+      })
+
+      detector.setIncludeExistingOnFirstPoll()
+      const result = await detector.forceCheck()
+
+      // DN은 제외되므로 2개만 감지
+      expect(result).toHaveLength(2)
+      // baseline은 max historyNo(102)로 설정
+      expect(mockState.saveCheckpoint).toHaveBeenCalledWith('last_history_no', '102')
+    })
+
+    it('should skip existing files on first poll by default', async () => {
+      ;(mockState.getCheckpoint as ReturnType<typeof vi.fn>).mockReturnValue(null)
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+        items: [
+          { historyNo: 100, itemSrcNo: 5001, itemSrcName: 'a', itemSrcExtension: 'dxf', itemFolderId: 1, itemFolderFullpath: '/올리기전용', itemOperCode: 'UP', itemUseDate: '2026-03-11' },
+        ],
+        total: 1,
+        pageSize: 20,
+      })
+
+      // setIncludeExistingOnFirstPoll를 호출하지 않음 → 기본 동작
+      const result = await detector.forceCheck()
+
+      expect(result).toHaveLength(0) // baseline만 설정, 파일 감지 안 함
+      expect(mockState.saveCheckpoint).toHaveBeenCalledWith('last_history_no', '100')
+    })
+
+    it('should reset includeExisting flag after first use (1회성)', async () => {
+      ;(mockState.getCheckpoint as ReturnType<typeof vi.fn>)
+        .mockReturnValueOnce(null)  // 첫 번째 poll: null → baseline
+        .mockReturnValue('100')     // 두 번째 poll: 정상
+
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+        items: [{ historyNo: 100, itemSrcNo: 5001, itemSrcName: 'a', itemSrcExtension: 'dxf', itemFolderId: 1, itemFolderFullpath: '/올리기전용', itemOperCode: 'UP', itemUseDate: '2026-03-11' }],
+        total: 1, pageSize: 20,
+      })
+
+      detector.setIncludeExistingOnFirstPoll()
+      await detector.forceCheck() // 1회차: 기존 파일 감지
+
+      // 2회차: 플래그 리셋됨 → 정상 폴링
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [], total: 0, pageSize: 20 })
+      const result2 = await detector.forceCheck()
+      expect(result2).toHaveLength(0) // 정상 동작
+    })
+  })
+
+  // ── GUEST 경로 필터링 ──
+
+  describe('cleanFolderPath GUEST filtering', () => {
+    it('should remove GUEST from folder path', () => {
+      expect(cleanFolderPath('/올리기전용/GUEST/업체A')).toBe('/올리기전용/업체A/')
+    })
+
+    it('should handle path without GUEST', () => {
+      expect(cleanFolderPath('/올리기전용/업체A')).toBe('/올리기전용/업체A/')
+    })
+
+    it('should handle GUEST-only path', () => {
+      expect(cleanFolderPath('/GUEST')).toBe('/')
+    })
+
+    it('should handle root path', () => {
+      expect(cleanFolderPath('/')).toBe('/')
+    })
+
+    it('should preserve trailing slash', () => {
+      expect(cleanFolderPath('/올리기전용/업체A/')).toBe('/올리기전용/업체A/')
+    })
+
+    it('should not remove lowercase guest (could be company name)', () => {
+      expect(cleanFolderPath('/올리기전용/guest/업체A')).toBe('/올리기전용/guest/업체A/')
+    })
+  })
+
+  // ── 경로 해결 (resolveFolderPath) ──
+
+  describe('경로 해결', () => {
+    it('itemFolderFullpath가 유효한 경로이면 그대로 사용한다', async () => {
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+        total: 1,
+        pageSize: 20,
+        items: [{
+          historyNo: 801, itemSrcNo: 9001, itemFolderId: 2001,
+          itemSrcName: 'test', itemSrcExtension: 'dxf', itemSrcType: 'file',
+          itemFolderFullpath: '/올리기전용/원컴퍼니/',
+          itemOperCode: 'UP', itemUseDate: '2026-03-11 10:00:00',
+        }],
+      })
+
+      const files = await detector.forceCheck()
+      expect(files[0].filePath).toBe('/올리기전용/원컴퍼니/test.dxf')
+      expect(mockState.getFolderByLguplusId).not.toHaveBeenCalled()
+    })
+
+    it('itemFolderFullpath가 "/"이면 DB에서 경로를 조회한다', async () => {
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+        total: 1,
+        pageSize: 20,
+        items: [{
+          historyNo: 802, itemSrcNo: 9002, itemFolderId: 2001,
+          itemSrcName: 'test', itemSrcExtension: 'dxf', itemSrcType: 'file',
+          itemFolderFullpath: '/',
+          itemOperCode: 'UP', itemUseDate: '2026-03-11 10:00:00',
+        }],
+      })
+      ;(mockState.getFolderByLguplusId as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'folder-1',
+        lguplus_folder_id: '2001',
+        lguplus_folder_name: '원컴퍼니',
+        lguplus_folder_path: '/올리기전용/원컴퍼니',
+      })
+
+      const files = await detector.forceCheck()
+      expect(mockState.getFolderByLguplusId).toHaveBeenCalledWith('2001')
+      expect(files[0].filePath).toBe('/올리기전용/원컴퍼니/test.dxf')
+    })
+
+    it('itemFolderFullpath가 "/"이고 DB에 폴더가 없으면 "/"를 사용한다', async () => {
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+        total: 1,
+        pageSize: 20,
+        items: [{
+          historyNo: 803, itemSrcNo: 9003, itemFolderId: 9999,
+          itemSrcName: 'test', itemSrcExtension: 'dxf', itemSrcType: 'file',
+          itemFolderFullpath: '/',
+          itemOperCode: 'UP', itemUseDate: '2026-03-11 10:00:00',
+        }],
+      })
+      ;(mockState.getFolderByLguplusId as ReturnType<typeof vi.fn>).mockReturnValue(null)
+
+      const files = await detector.forceCheck()
+      expect(mockState.getFolderByLguplusId).toHaveBeenCalledWith('9999')
+      expect(files[0].filePath).toBe('/test.dxf')
+    })
   })
 })

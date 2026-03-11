@@ -213,6 +213,8 @@ export interface AppSettings {
     autoStart: boolean
     tempDownloadPath: string
     logRetentionDays: number
+    autoDetection: boolean
+    watchFolderIds: string[]
   }
 }
 
@@ -444,6 +446,10 @@ export interface IpcChannelMap {
   'test:upload-only': { request: TestUploadRequest; response: ApiResponse<TestUploadResult> }
   'test:full-sync': { request: FullSyncRequest; response: ApiResponse<TestFullSyncResult> }
   'test:open-download-folder': { request: void; response: ApiResponse<void> }
+  'test:clear-downloads': {
+    request: void
+    response: ApiResponse<{ deletedFiles: number; deletedFolders: number; resetRecords: number }>
+  }
   'test:realtime-start': {
     request: RealtimeTestStartRequest
     response: ApiResponse<void>
@@ -456,10 +462,97 @@ export interface IpcChannelMap {
   // Failed / DLQ
   'failed:list': { request: PaginationRequest; response: ApiResponse<Paginated<FailedEvent>> }
 
+  // Detection (실시간 감지 서비스)
+  'detection:start': { request: DetectionStartRequest; response: ApiResponse<void> }
+  'detection:stop': { request: void; response: ApiResponse<void> }
+  'detection:status': { request: void; response: ApiResponse<DetectionStatusResponse> }
+  'detection:sessions': {
+    request: DetectionSessionsRequest
+    response: ApiResponse<Paginated<DetectionSessionInfo>>
+  }
+  'detection:recover': { request: void; response: ApiResponse<DetectionRecoverResult> }
+  'detection:set-watch-folders': {
+    request: { folderIds: string[] }
+    response: ApiResponse<void>
+  }
+  'detection:get-watch-folders': {
+    request: void
+    response: ApiResponse<{ folderIds: string[] }>
+  }
+
   // Notifications
   'notification:getAll': { request: void; response: ApiResponse<NotificationItem[]> }
   'notification:read': { request: { id: string }; response: ApiResponse<void> }
   'notification:readAll': { request: void; response: ApiResponse<void> }
+}
+
+// ── Detection service types ──
+
+export interface DetectionStartRequest {
+  /** 감지 시작 소스 */
+  source: 'manual' | 'auto-start' | 'recovery'
+}
+
+export interface DetectionStatusResponse {
+  /** 현재 감지 상태 */
+  status: 'stopped' | 'starting' | 'running' | 'stopping' | 'recovering'
+  /** 현재 세션 ID (없으면 null) */
+  currentSessionId: string | null
+  /** 현재 세션 통계 */
+  currentSession: {
+    filesDetected: number
+    filesDownloaded: number
+    filesFailed: number
+    startedAt: string
+    lastHistoryNo: number | null
+  } | null
+  /** 마지막 폴링 시각 */
+  lastPollAt: string | null
+  /** 자동 시작 설정 여부 */
+  autoStartEnabled: boolean
+}
+
+export interface DetectionSessionInfo {
+  id: string
+  startedAt: string
+  stoppedAt: string | null
+  stopReason: 'manual' | 'crash' | 'app-quit' | 'error' | null
+  filesDetected: number
+  filesDownloaded: number
+  filesFailed: number
+  lastHistoryNo: number | null
+}
+
+export interface DetectionSessionsRequest {
+  page?: number
+  pageSize?: number
+}
+
+export interface DetectionRecoverResult {
+  recoveredFiles: number
+  failedFiles: number
+  fromHistoryNo: number
+  toHistoryNo: number
+}
+
+export interface DetectionEventPush {
+  type: 'started' | 'detected' | 'downloaded' | 'failed' | 'error' | 'stopped' | 'recovery'
+  message: string
+  timestamp: string
+  fileName?: string
+  filePath?: string
+  operCode?: string
+  sessionId?: string
+  stats?: {
+    filesDetected: number
+    filesDownloaded: number
+    filesFailed: number
+  }
+}
+
+export interface DetectionStatusPush {
+  status: 'stopped' | 'starting' | 'running' | 'stopping' | 'recovering'
+  sessionId: string | null
 }
 
 // ── Realtime detection test types ──
@@ -559,6 +652,13 @@ export interface ScanProgressEvent {
   discoveredCount: number
 }
 
+export interface StartProgressEvent {
+  step: string
+  message: string
+  current: number
+  total: number
+}
+
 export interface IpcEventMap {
   'sync:progress': SyncProgressEvent
   'sync:file-completed': FileCompletedEvent
@@ -566,6 +666,9 @@ export interface IpcEventMap {
   'sync:status-changed': StatusChangedEvent
   'detection:new-files': NewFilesEvent
   'detection:scan-progress': ScanProgressEvent
+  'detection:start-progress': StartProgressEvent
+  'detection:event': DetectionEventPush
+  'detection:status-changed': DetectionStatusPush
   'opercode:event': OperCodeEvent
   'auth:expired': AuthExpiredEvent
   'error:critical': CriticalErrorEvent

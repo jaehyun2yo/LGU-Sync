@@ -2,6 +2,7 @@ import type { ILGUplusClient, LGUplusFolderItem } from './types/lguplus-client.t
 import type { IWebhardUploader } from './types/webhard-uploader.types'
 import type { IStateManager } from './types/state-manager.types'
 import type { ILogger } from './types/logger.types'
+import { filterPathSegments } from './path-utils'
 
 export interface DiscoveryResult {
   total: number
@@ -79,13 +80,21 @@ export class FolderDiscovery {
 
     for (const folder of subFolders) {
       const lguplusFolderId = String(folder.folderId)
-      const folderPath = parentPath ? `${parentPath}/${folder.folderName}` : `/${folder.folderName}`
+      const rawSegments = parentPath
+        ? [...parentPath.split('/').filter(Boolean), folder.folderName]
+        : [folder.folderName]
+      const cleanSegments = filterPathSegments(rawSegments)
+      const folderPath = cleanSegments.length > 0 ? `/${cleanSegments.join('/')}` : ''
       const existing = this.state.getFolderByLguplusId(lguplusFolderId)
 
       if (existing) {
-        if (existing.lguplus_folder_name !== folder.folderName) {
+        const needsUpdate = existing.lguplus_folder_name !== folder.folderName
+          || !existing.lguplus_folder_path
+          || existing.lguplus_folder_path !== folderPath
+        if (needsUpdate) {
           this.state.updateFolder(existing.id, {
             lguplus_folder_name: folder.folderName,
+            lguplus_folder_path: folderPath,
             company_name: folder.folderName,
           })
         }
@@ -120,7 +129,11 @@ export class FolderDiscovery {
 
     // 하위 폴더 재귀 탐색
     for (const folder of subFolders) {
-      const folderPath = parentPath ? `${parentPath}/${folder.folderName}` : `/${folder.folderName}`
+      const rawSegs = parentPath
+        ? [...parentPath.split('/').filter(Boolean), folder.folderName]
+        : [folder.folderName]
+      const cleanSegs = filterPathSegments(rawSegs)
+      const folderPath = cleanSegs.length > 0 ? `/${cleanSegs.join('/')}` : ''
       await this.discoverRecursive(folder.folderId, folderPath, result)
     }
   }
@@ -134,7 +147,7 @@ export class FolderDiscovery {
     // 자체웹하드 폴더 생성: 경로 세그먼트로 분할
     let selfWebhardPath: string | null = null
     try {
-      const segments = folderPath.split('/').filter(Boolean)
+      const segments = filterPathSegments(folderPath.split('/').filter(Boolean))
       const ensureResult = await this.uploader.ensureFolderPath(segments)
       if (ensureResult.success && ensureResult.data) {
         selfWebhardPath = ensureResult.data

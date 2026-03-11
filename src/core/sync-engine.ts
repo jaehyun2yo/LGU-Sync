@@ -1,3 +1,4 @@
+import { join, normalize, sep } from 'node:path'
 import type {
   ISyncEngine,
   FullSyncOptions,
@@ -19,6 +20,7 @@ import {
   FileDownloadTransferError,
   FileUploadError,
 } from './errors'
+import { filterPathSegments } from './path-utils'
 
 export interface SyncEngineDeps {
   detector: IFileDetector
@@ -263,19 +265,23 @@ export class SyncEngine implements ISyncEngine {
         ? Number(file.lguplus_file_id)
         : file.history_no ?? 0
 
+      const fi = { fileName: file.file_name, filePath: file.file_path }
+
       if (!lguplusFileId) {
         const errMsg = `No LGU+ file ID available for file ${fileId} (${file.file_name})`
         this.logger.error(errMsg)
         this.deps.state.updateFileStatus(fileId, 'dl_failed', { last_error: errMsg })
-        this.emitSyncFailed(errMsg, fileId)
+        this.emitSyncFailed(errMsg, fileId, fi)
         return { success: false, fileId, error: errMsg }
       }
 
+      // path.join + normalize로 OS 호환 경로 생성 (혼합 슬래시 방지)
       const segments = this.getPathSegments(file.file_path)
-      const subPath = segments.join('/')
-      const destPath = subPath
-        ? `${this.getTempPath()}/${subPath}/${file.file_name}`
-        : `${this.getTempPath()}/${file.file_name}`
+      const destPath = segments.length > 0
+        ? normalize(join(this.getTempPath(), ...segments, file.file_name))
+        : normalize(join(this.getTempPath(), file.file_name))
+
+      this.logger.debug('Download path resolved', { fileId, destPath, segments, filePath: file.file_path })
 
       const downloadResult = await this.deps.retry.execute(
         () =>
@@ -295,7 +301,7 @@ export class SyncEngine implements ISyncEngine {
       if (!downloadResult.success) {
         const errMsg = `Download returned empty result for file ${file.lguplus_file_id}`
         this.deps.state.updateFileStatus(fileId, 'dl_failed', { last_error: errMsg })
-        this.emitSyncFailed(errMsg, fileId)
+        this.emitSyncFailed(errMsg, fileId, fi)
         return { success: false, fileId, error: errMsg }
       }
 
@@ -307,12 +313,12 @@ export class SyncEngine implements ISyncEngine {
       this.logger.info(`File downloaded: ${file.file_name}`, { fileId })
       return { success: true, fileId }
     } catch (error) {
-      const errMsg = (error as Error).message
+      const errMsg = classifyDownloadError(error as Error, file.file_name, file.file_path)
       this.deps.state.updateFileStatus(fileId, 'dl_failed', {
         last_error: errMsg,
         retry_count: (file.retry_count ?? 0) + 1,
       })
-      this.emitSyncFailed(error, fileId)
+      this.emitSyncFailed(error, fileId, { fileName: file.file_name, filePath: file.file_path })
       this.logger.error(`Download failed for file ${fileId}`, error as Error)
       return { success: false, fileId, error: errMsg }
     }
@@ -391,7 +397,7 @@ export class SyncEngine implements ISyncEngine {
         this.deps.state.updateFileStatus(fileId, 'ul_failed', {
           last_error: errMsg,
         })
-        this.emitSyncFailed(errMsg, fileId)
+        this.emitSyncFailed(errMsg, fileId, { fileName: file.file_name, filePath: file.file_path })
         return { success: false, fileId, error: errMsg }
       }
 
@@ -406,12 +412,12 @@ export class SyncEngine implements ISyncEngine {
       this.logger.info(`File uploaded: ${file.file_name}`, { fileId })
       return { success: true, fileId }
     } catch (error) {
-      const errMsg = (error as Error).message
+      const errMsg = classifyUploadError(error as Error, file.file_name)
       this.deps.state.updateFileStatus(fileId, 'ul_failed', {
         last_error: errMsg,
         retry_count: (file.retry_count ?? 0) + 1,
       })
-      this.emitSyncFailed(error, fileId)
+      this.emitSyncFailed(error, fileId, { fileName: file.file_name, filePath: file.file_path })
       this.logger.error(`Upload failed for file ${fileId}`, error as Error)
       return { success: false, fileId, error: errMsg }
     }
@@ -703,21 +709,37 @@ export class SyncEngine implements ISyncEngine {
   }
 
   /** Error 또는 문자열을 SyncAppError로 래핑하여 sync:failed 이벤트 발행 */
-  private emitSyncFailed(errorOrMsg: unknown, fileId: string): void {
+  private emitSyncFailed(
+    errorOrMsg: unknown,
+    fileId: string,
+    fileInfo?: { fileName?: string; filePath?: string },
+  ): void {
+    const ctx: Record<string, unknown> = { fileId }
+    if (fileInfo?.fileName) ctx.fileName = fileInfo.fileName
+    if (fileInfo?.filePath) ctx.filePath = fileInfo.filePath
+
     let syncError: SyncAppError
     if (errorOrMsg instanceof SyncAppError) {
       syncError = errorOrMsg
+      // Merge file info into existing context if missing
+      if (fileInfo?.fileName && !syncError.context.fileName) {
+        ;(syncError.context as Record<string, unknown>).fileName = fileInfo.fileName
+      }
+      if (fileInfo?.filePath && !syncError.context.filePath) {
+        ;(syncError.context as Record<string, unknown>).filePath = fileInfo.filePath
+      }
     } else if (errorOrMsg instanceof Error) {
-      syncError = new FileDownloadTransferError(errorOrMsg.message, { fileId })
+      syncError = new FileDownloadTransferError(errorOrMsg.message, ctx)
     } else {
-      syncError = new FileUploadError(String(errorOrMsg), { fileId })
+      syncError = new FileUploadError(String(errorOrMsg), ctx)
     }
     this.deps.eventBus.emit('sync:failed', { error: syncError, fileId })
   }
 
   private getPathSegments(filePath: string): string[] {
-    const parts = filePath.split('/').filter(Boolean)
-    return parts.slice(0, -1) // exclude filename
+    // forward + backward slash 모두 분리 (Windows 혼합 경로 대응)
+    const parts = filePath.split(/[/\\]/).filter(Boolean)
+    return filterPathSegments(parts.slice(0, -1)) // exclude filename
   }
 
   private getMaxConcurrent(): number {
@@ -737,4 +759,91 @@ export class SyncEngine implements ISyncEngine {
       return './downloads'
     }
   }
+}
+
+/** 다운로드 에러를 사용자가 알아보기 쉬운 한글 메시지로 분류 */
+function classifyDownloadError(error: Error, fileName: string, filePath: string): string {
+  const msg = error.message
+  const code = (error as NodeJS.ErrnoException).code
+
+  // 파일시스템 에러
+  if (code === 'ENOENT' || msg.includes('ENOENT')) {
+    return `[경로 오류] 다운로드 경로를 찾을 수 없습니다 — 파일: ${fileName}, 경로: ${filePath}`
+  }
+  if (code === 'EACCES' || code === 'EPERM' || msg.includes('EACCES') || msg.includes('EPERM')) {
+    return `[권한 오류] 다운로드 폴더에 쓰기 권한이 없습니다 — ${fileName}`
+  }
+  if (code === 'ENOSPC' || msg.includes('ENOSPC')) {
+    return `[디스크 공간 부족] 다운로드할 공간이 부족합니다 — ${fileName}`
+  }
+  if (code === 'ENAMETOOLONG' || msg.includes('ENAMETOOLONG')) {
+    return `[경로 길이 초과] 파일 경로가 너무 깁니다 — ${fileName}`
+  }
+
+  // SyncAppError 계층
+  if (error instanceof SyncAppError) {
+    const c = error.code
+    if (c === 'AUTH_SESSION_EXPIRED') {
+      return `[세션 만료] LGU+ 로그인 세션이 만료되었습니다 — ${fileName}`
+    }
+    if (c === 'DL_FILE_NOT_FOUND') {
+      return `[파일 없음] 서버에서 파일을 찾을 수 없습니다 — ${fileName} (삭제되었거나 이동됨)`
+    }
+    if (c === 'DL_URL_FETCH_FAILED') {
+      return `[URL 오류] 다운로드 URL을 가져올 수 없습니다 — ${fileName}`
+    }
+    if (c === 'DL_SIZE_MISMATCH') {
+      return `[크기 불일치] 다운로드된 파일 크기가 다릅니다 — ${fileName} (네트워크 불안정)`
+    }
+    if (c === 'DL_TRANSFER_FAILED') {
+      return `[전송 실패] 다운로드 중 전송 오류 발생 — ${fileName}`
+    }
+    if (c === 'DL_CIRCUIT_OPEN') {
+      return `[회로 차단] 반복 실패로 다운로드가 일시 중단되었습니다 — ${fileName}`
+    }
+    return `[${c}] ${error.message} — ${fileName}`
+  }
+
+  // 네트워크 에러
+  if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET')) {
+    return `[네트워크 오류] 서버 연결에 실패했습니다 — ${fileName}`
+  }
+  if (msg.includes('ETIMEDOUT') || msg.includes('timeout')) {
+    return `[시간 초과] 다운로드 시간이 초과되었습니다 — ${fileName}`
+  }
+
+  // Circuit breaker
+  if (msg.includes('circuit') || msg.includes('Circuit')) {
+    return `[회로 차단] 반복 실패로 다운로드가 일시 중단되었습니다 — ${fileName}`
+  }
+
+  // 기본
+  return `[다운로드 실패] ${msg} — ${fileName}`
+}
+
+/** 업로드 에러를 사용자가 알아보기 쉬운 한글 메시지로 분류 */
+function classifyUploadError(error: Error, fileName: string): string {
+  const msg = error.message
+  const code = (error as NodeJS.ErrnoException).code
+
+  if (code === 'ENOENT' || msg.includes('ENOENT')) {
+    return `[파일 없음] 다운로드된 파일을 찾을 수 없어 업로드 불가 — ${fileName}`
+  }
+  if (msg.includes('folder path not configured') || msg.includes('Self-webhard')) {
+    return `[폴더 미설정] 자체웹하드 업로드 폴더가 설정되지 않았습니다 — ${fileName}`
+  }
+  if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET')) {
+    return `[네트워크 오류] 자체웹하드 서버 연결에 실패했습니다 — ${fileName}`
+  }
+  if (msg.includes('ETIMEDOUT') || msg.includes('timeout')) {
+    return `[시간 초과] 업로드 시간이 초과되었습니다 — ${fileName}`
+  }
+  if (msg.includes('circuit') || msg.includes('Circuit')) {
+    return `[회로 차단] 반복 실패로 업로드가 일시 중단되었습니다 — ${fileName}`
+  }
+  if (msg.includes('401') || msg.includes('403') || msg.includes('Unauthorized') || msg.includes('Forbidden')) {
+    return `[인증 오류] 자체웹하드 API 인증에 실패했습니다 — ${fileName}`
+  }
+
+  return `[업로드 실패] ${msg} — ${fileName}`
 }
