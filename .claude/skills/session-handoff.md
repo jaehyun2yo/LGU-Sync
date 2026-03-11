@@ -1,47 +1,47 @@
 ---
 name: session-handoff
-description: 세션 종료 시 작업 상태 저장 및 다음 세션 인수인계. "세션정리", "마무리", "handoff" 키워드로 트리거.
+description: Save work state and prepare handoff for next session. Triggers on "세션정리", "마무리", "handoff".
 ---
 
-# 세션 핸드오프
+# Session Handoff
 
-현재 세션의 작업 상태를 저장하고, 다음 세션에서 즉시 이어서 작업할 수 있도록 인수인계 문서를 정리한다.
+Save current session state and prepare handoff documents for seamless continuation.
 
-## 절차
+## Procedure
 
-### 1. 미커밋 변경사항 확인
+### 1. Check Uncommitted Changes
 ```bash
 git status
 git diff --stat
 ```
 
-### 2. progress.txt 업데이트
-`docs/progress.txt`를 현재 상태로 업데이트:
-- 완료된 항목은 `[x]`로 체크
-- 진행 중인 항목은 구체적 상태 기록
-- 알려진 이슈에 새로 발견된 버그 추가
-- 다음 작업에 이어서 할 내용 기록
+### 2. Update progress.txt
+Update `docs/progress.txt` with current state:
+- Mark completed items with `[x]`
+- Record specific status for in-progress items
+- Add newly discovered bugs to known issues
+- Record next steps
 
-### 3. 작업 로그 작성 (변경사항이 있는 경우)
-`docs/work-logs/NNN-작업명.md` 생성:
-- 마지막 번호 확인: `ls docs/work-logs/ | tail -1`
-- CLAUDE.md의 템플릿 형식 준수
+### 3. Write Work Log (if changes exist)
+Create `docs/work-logs/NNN-work-name.md`:
+- Check last number: `ls docs/work-logs/ | tail -1`
+- Follow CLAUDE.md template format
 
-### 4. features-list.md 업데이트
-`docs/features-list.md`에서:
-- 완료된 기능 상태 갱신
-- 새로 발견된 버그 추가
-- 계획된 기능 업데이트
+### 4. Update features-list.md
+In `docs/features-list.md`:
+- Update completed feature status
+- Add newly discovered bugs
+- Update planned features
 
-### 5. CHANGELOG.md 업데이트 (릴리스 준비 시)
-주요 변경사항을 `[Unreleased]` 섹션에 추가
+### 5. Update CHANGELOG.md (if release-worthy)
+Add significant changes to `[Unreleased]` section
 
-### 6. 인수인계 요약 출력
-사용자에게 보여줄 요약:
+### 6. Print Handoff Summary
+Show user:
 ```
-=== 세션 인수인계 ===
-- 완료: [이번 세션에서 완료한 것]
-- 진행 중: [아직 끝나지 않은 것]
-- 다음 작업: [다음 세션에서 할 것]
-- 주의: [알아야 할 이슈]
+=== Session Handoff ===
+- Completed: [what was done this session]
+- In Progress: [unfinished work]
+- Next Steps: [what to do next session]
+- Notes: [issues to be aware of]
 ```

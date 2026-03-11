@@ -29,6 +29,13 @@ else
   echo "[OK] 모든 변경사항 커밋됨."
 fi
 
+# Check if code changed but specs not updated
+CODE_CHANGED=$(git diff --name-only HEAD 2>/dev/null | grep -c '^src/' || echo 0)
+PLAN_CHANGED=$(git diff --name-only HEAD 2>/dev/null | grep -c '^docs/plans/' || echo 0)
+if [ "$CODE_CHANGED" -gt 0 ] && [ "$PLAN_CHANGED" -eq 0 ]; then
+  echo "[!] Code changed but docs/plans/ specs not updated. Check if spec sync is needed."
+fi
+
 # Check work log
 LAST_LOG=$(ls -1 docs/work-logs/*.md 2>/dev/null | tail -1)
 if [ -n "$LAST_LOG" ]; then

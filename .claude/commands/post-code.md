@@ -6,60 +6,52 @@ Run the complete post-coding quality pipeline on changed files. Execute each ste
 
 ## Pipeline
 
-### Step 1: TypeScript 타입 검사
+### Step 1: TypeScript Type Check
 ```bash
 npm run typecheck
 ```
-- FAIL 시: 타입 에러를 즉시 수정하고 다시 실행
-- PASS 시: Step 2 진행
+- FAIL: Fix type errors immediately, re-run
+- PASS: Proceed to Step 2
 
-### Step 2: ESLint 검사
+### Step 2: ESLint
 ```bash
 npm run lint
 ```
-- FAIL 시: `npm run lint:fix`로 자동 수정 시도, 수동 수정 필요한 것은 수정
-- PASS 시: Step 3 진행
+- FAIL: Try `npm run lint:fix`, manually fix remaining issues
+- PASS: Proceed to Step 3
 
-### Step 3: 관련 테스트 실행
-- `git diff --name-only`로 변경 파일 파악
-- 변경 파일에 대응하는 테스트 파일 찾기:
-  - `src/core/foo.ts` → `tests/core/foo.test.ts`
-  - `src/renderer/stores/foo.ts` → `tests/renderer/stores/foo.test.ts`
-- 대응 테스트가 있으면 해당 테스트만 실행: `npx vitest run [test-file]`
-- 대응 테스트가 없으면 전체 테스트: `npm run test`
-- FAIL 시: 테스트 실패 원인 분석 후 코드 수정, 다시 Step 1부터
+### Step 3: Run Related Tests
+- `git diff --name-only` to identify changed files
+- Find corresponding test files:
+  - `src/core/foo.ts` -> `tests/core/foo.test.ts`
+  - `src/renderer/stores/foo.ts` -> `tests/renderer/stores/foo.test.ts`
+- If matching tests exist: `npx vitest run [test-file]`
+- If no matching tests: `npm run test`
+- FAIL: Analyze failure, fix code, restart from Step 1
 
-### Step 4: 코드 리뷰
-- 변경된 파일을 읽고 아래 항목 검사:
-  - 타입 안전성 (`any` 사용, 타입 단언 남용)
-  - 프로젝트 컨벤션 (`I` 접두사, `SyncAppError` 계층, DI 패턴)
-  - 코드 중복, 함수 길이 (50줄 초과)
-  - 성능 이슈 (불필요한 리렌더링, 메모리 누수)
-- 문제 발견 시: 수정 후 Step 1부터 재실행
-- 문제 없으면: Step 5 진행
+### Step 4: Code Review
+- Read changed files and check:
+  - Type safety (`any` usage, type assertion overuse)
+  - Project conventions (`I` prefix, `SyncAppError` hierarchy, DI pattern)
+  - Code duplication, function length (> 50 lines)
+  - Performance issues (unnecessary re-renders, memory leaks)
+- Issues found: Fix, restart from Step 1
+- Clean: Proceed to Step 5
 
-### Step 5: 인수인계 (자동)
-모든 품질 검사를 통과한 후, 세션 추적 문서를 자동 업데이트:
+### Step 5: Handoff (automatic)
+After all quality checks pass, auto-update session tracking:
 
-1. **`docs/progress.txt` 업데이트**
-   - "진행 중" 섹션에 현재 작업 상태 반영
-   - 완료된 항목은 "완료된 기능"으로 이동
-   - 새로 발견된 이슈는 "알려진 이슈"에 추가
+1. **`docs/progress.txt`** — Reflect current work status, move completed items, add new issues
+2. **`docs/features-list.md`** — Update feature status, add new bugs
+3. **`CHANGELOG.md`** — Add changes to `[Unreleased]` (Added/Fixed/Changed)
 
-2. **`docs/features-list.md` 업데이트**
-   - 변경된 기능의 상태 갱신
-   - 새 버그 발견 시 "미해결 버그" 테이블에 추가
-
-3. **`CHANGELOG.md` 업데이트**
-   - `[Unreleased]` 섹션에 변경사항 추가 (Added/Fixed/Changed 분류)
-
-### 결과 보고
+### Report
 ```
-=== Post-Code Pipeline 결과 ===
+=== Post-Code Pipeline ===
 1. TypeCheck: PASS/FAIL
 2. Lint: PASS/FAIL
-3. Test: PASS/FAIL (N개 통과, M개 실패)
-4. Review: PASS/WARN (N개 제안)
+3. Test: PASS/FAIL (N passed, M failed)
+4. Review: PASS/WARN (N suggestions)
 5. Handoff: UPDATED (progress.txt, features-list.md, CHANGELOG.md)
-=== 전체: PASS/FAIL ===
+=== Overall: PASS/FAIL ===
 ```

@@ -1,51 +1,51 @@
 ---
 name: project-planning
-description: 기능 추가/버그 수정 전 구조화된 계획 수립. "계획", "plan", "설계" 키워드로 트리거.
+description: Structured planning before feature work or bug fixes. Triggers on "계획", "plan", "설계".
 ---
 
-# 프로젝트 계획 수립
+# Project Planning
 
-기능 추가나 버그 수정 작업 전에 구조화된 계획을 세워 컨텍스트 낭비와 방향 전환을 방지한다.
+Create a structured plan before feature or bugfix work to prevent context waste and direction changes.
 
-## 절차
+## Procedure
 
-### 1. 현황 파악 (5분)
-1. `docs/progress.txt` 읽어 현재 상태 확인
-2. `docs/features-list.md` 읽어 관련 기능 상태 확인
-3. 관련 코드 파일 심볼 수준으로 탐색 (전체 읽기 금지)
+### 1. Status Check (5 min)
+1. Read `docs/progress.txt` for current state
+2. Read `docs/features-list.md` for related feature status
+3. Explore related code at symbol level (no full file reads)
 
-### 2. 영향 범위 분석 (5분)
-1. 변경 대상 파일 목록 작성
-2. 의존성 파악 (어떤 서비스가 영향받는지)
-3. 테스트 파일 확인 (기존 테스트가 있는지)
+### 2. Impact Analysis (5 min)
+1. List files to be changed
+2. Identify dependencies (which services are affected)
+3. Check test files (do existing tests cover this?)
 
-### 3. 계획 문서 작성
-`docs/plans/YYYY-MM-DD-{작업명}.md` 생성:
+### 3. Write Plan Document
+Create `docs/plans/YYYY-MM-DD-{work-name}.md`:
 
 ```markdown
-# 작업명
+# Work Name
 
-## 목표
-1줄 요약
+## Goal
+One-line summary
 
-## 변경 계획
-| # | 파일 | 변경 내용 | 리스크 |
-|---|------|----------|--------|
+## Change Plan
+| # | File | Change | Risk |
+|---|------|--------|------|
 | 1 | ... | ... | ... |
 
-## 테스트 계획
-- 기존 테스트 영향: ...
-- 추가 테스트: ...
+## Test Plan
+- Existing test impact: ...
+- New tests needed: ...
 
-## 완료 기준
-- [ ] 기준 1
-- [ ] 기준 2
+## Done Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
 ```
 
-### 4. 사용자 확인
-계획을 사용자에게 보여주고 승인 후 작업 시작.
+### 4. User Confirmation
+Show plan to user and start work after approval.
 
-## 주의사항
-- `docs/plans/` 내 대용량 명세서(500줄+)는 부분 읽기만
-- 계획 문서는 200줄 이내로 간결하게
-- 계획 없이 코드 수정 시작하지 않기
+## Notes
+- Large specs (500+ lines) in `docs/plans/`: partial reads only
+- Keep plan documents under 200 lines
+- Never start code changes without a plan
