@@ -1,0 +1,28 @@
+# 외부웹하드동기화프로그램2 진행 상황
+최종 업데이트: 2026-03-11
+
+## 완료된 기능
+- [x] LGU+ 웹하드 폴링 기반 파일 감지 (FileDetector)
+- [x] 파일 다운로드 파이프라인 (LGUplusClient → 로컬)
+- [x] 자체웹하드 업로드 (YjlaserUploader → yjlaser.net)
+- [x] SQLite 기반 동기화 상태 관리 (StateManager)
+- [x] Electron GUI (React 19 + Zustand, 5개 스토어)
+- [x] 실시간 감지 페이지 (RealtimeDetectionPage, DetectionService)
+- [x] 통합 알림 시스템 (토스트 + Web Audio 알림음)
+- [x] 서킷 브레이커 패턴 (RetryManager, UI 노출 + 수동 리셋)
+- [x] 폴더 구조 보존 다운로드
+- [x] 깊은 폴더 재귀 스캔 (ITEM_SRC_NO 기반)
+- [x] 스캔 진행바, 디렉토리 트리 표시
+- [x] LGU+ API 한글 인코딩 수정
+- [x] 핵심 서비스 전면 리팩토링 및 성능 최적화
+- [x] 다운로드/감지 전담 팀 스킬 (멀티에이전트)
+- [x] 작업 문서 자동 리마인드 훅 (PostToolUse)
+
+## 진행 중
+- [ ] (현재 진행 중인 작업을 여기에 기록)
+
+## 알려진 이슈
+- [ ] 실시간 감지 관련 버그 수정 진행 (docs/superpowers/plans/2026-03-11-detection-bugfix-3issues.md 참조)
+
+## 다음 작업
+- [ ] (계획된 다음 작업을 여기에 기록)

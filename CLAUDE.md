@@ -79,14 +79,49 @@ Zustand v5 스토어 5개: `sync-store`, `log-store`, `settings-store`, `notific
 - `tests/mocks/`: MSW 핸들러 (lguplus, yjlaser API 목)
 - `tests/e2e/`: Playwright (직렬 실행, 워커 1개)
 
-## 에이전트 팀
+## 세션 프로토콜
 
-다운로드 파이프라인 관련 작업(버그 수정, 기능 개선, 코드 리뷰, 디버깅) 시 **다운로드 팀**을 호출하여 멀티 에이전트로 작업한다.
+### 시작 시
+1. `docs/progress.txt` 읽어 현재 진행 상황 파악
+2. `git log --oneline -10`으로 최근 작업 확인
+3. 미완료 항목부터 작업 시작
 
-- **트리거:** 사용자가 "다운로드 팀", "다운로드팀"을 언급하면 `.claude/skills/download-pipeline-team.md` 스킬을 호출
-- **스킬 파일:** `.claude/skills/download-pipeline-team.md`
-- **팀 구성:** TeamCreate → TaskCreate → Agent 스폰 (reviewer, analyzer, implementer, tester, verifier)
-- **이슈 카탈로그:** 스킬 파일 내 86건의 알려진 이슈 목록 참조 필수
+### 종료 시
+1. `docs/progress.txt` 업데이트 (완료/미완료 항목)
+2. 작업 로그 작성 (`docs/work-logs/`)
+3. 커밋하지 않은 변경사항 정리
+
+## 컨텍스트 관리
+
+- `docs/plans/` 내 대용량 명세서(500줄+)는 필요한 섹션만 offset/limit으로 부분 읽기
+- 코드 탐색 시 심볼 기반 도구 우선 사용 (전체 파일 읽기 자제)
+
+### 대용량 명세 분리 완료
+아래 명세는 인덱스 + 서브파일로 분리됨 (각 서브파일 500줄 이하):
+- `docs/plans/01-PRD/` (5개 파일), `docs/plans/04-동기화엔진/` (7개 파일)
+- `docs/plans/05-GUI-UX/` (5개 파일), `docs/plans/07-테스트케이스/` (6개 파일)
+- `docs/plans/10-SDD/` (6개 파일)
+- 인덱스 파일(`01-PRD-제품요구사항정의서.md` 등)에서 필요한 섹션 링크 확인 후 해당 서브파일만 읽기
+
+## 스킬 & 커맨드
+
+### 스킬 트리거
+
+| 키워드 | 스킬 | 설명 |
+|--------|------|------|
+| "다운로드 팀", "다운로드팀" | `download-pipeline-team` | 다운로드 파이프라인 멀티에이전트 |
+| "감지 팀", "감지팀" | `realtime-detection-team` | 실시간 감지 멀티에이전트 |
+| "웹하드팀", "웹하드 팀" | `webhard-team` | 웹하드 전담 에이전트 팀 |
+| "계획", "plan", "설계" | `project-planning` | 구조화된 작업 계획 수립 |
+| "세션정리", "마무리", "handoff" | `session-handoff` | 세션 종료 + 인수인계 |
+
+### 슬래시 커맨드
+
+| 커맨드 | 설명 |
+|--------|------|
+| `/check` | typecheck + lint + test 순차 실행 |
+| `/review` | 변경 코드 리뷰 + 리팩토링 제안 |
+| `/post-code` | 코딩 후 전체 파이프라인 (typecheck → lint → test → 코드리뷰 → 인수인계) |
 
 ## 설계 문서
 
