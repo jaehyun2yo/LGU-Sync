@@ -1,14 +1,9 @@
 import {
   LayoutDashboard,
-  FolderOpen,
   FolderSync,
-  ScrollText,
-  BarChart3,
   Settings,
   ChevronLeft,
   ChevronRight,
-  DatabaseBackup,
-  FlaskConical,
   Radio,
   RefreshCw,
   ArrowDown,
@@ -28,13 +23,7 @@ interface NavItem {
 
 const mainNav: NavItem[] = [
   { id: 'dashboard', label: '대시보드', icon: LayoutDashboard, shortcut: 'Ctrl+1' },
-  { id: 'file-explorer', label: '파일 탐색기', icon: FolderOpen, shortcut: 'Ctrl+2' },
-  { id: 'folder-settings', label: '폴더 설정', icon: FolderSync, shortcut: 'Ctrl+3' },
-  { id: 'sync-log', label: '동기화 로그', icon: ScrollText, shortcut: 'Ctrl+4' },
-  { id: 'statistics', label: '통계', icon: BarChart3, shortcut: 'Ctrl+5' },
-  { id: 'migration', label: '마이그레이션', icon: DatabaseBackup, shortcut: 'Ctrl+6' },
-  { id: 'realtime-detection', label: '실시간 감지', icon: Radio, shortcut: 'Ctrl+7' },
-  { id: 'test', label: '테스트', icon: FlaskConical, shortcut: 'Ctrl+8' },
+  { id: 'realtime-detection', label: '실시간 감지', icon: Radio, shortcut: 'Ctrl+2' },
 ]
 
 const bottomNav: NavItem[] = [
@@ -188,7 +177,7 @@ export function Sidebar() {
         {mainNav.map((item) => {
           const Icon = item.icon
           const isActive = currentPage === item.id
-          const hasBadge = item.id === 'sync-log' && todayFailed > 0
+          const hasBadge = item.id === 'realtime-detection' && todayFailed > 0
           return (
             <button
               key={item.id}

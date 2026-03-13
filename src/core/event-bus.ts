@@ -25,7 +25,11 @@ export class EventBus implements IEventBus {
     const handlers = this.listeners.get(event)
     if (!handlers) return
     for (const handler of [...handlers]) {
-      handler(data)
+      try {
+        handler(data)
+      } catch (error) {
+        console.error(`[EventBus] Handler error on "${String(event)}":`, error)
+      }
     }
   }
 

@@ -188,6 +188,24 @@ export class StateManager implements IStateManager {
     return row ? this.mapFileRow(row) : null
   }
 
+  updateFileInfo(fileId: string, data: { file_name?: string; file_path?: string; download_path?: string; folder_id?: string }): void {
+    const updates: string[] = []
+    const params: unknown[] = []
+
+    for (const [key, val] of Object.entries(data)) {
+      if (val !== undefined) {
+        updates.push(`${key} = ?`)
+        params.push(val)
+      }
+    }
+
+    if (updates.length === 0) return
+    updates.push(`updated_at = datetime('now')`)
+    params.push(fileId)
+
+    this.db.prepare(`UPDATE sync_files SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+  }
+
   // ── Sync Folders ──
 
   saveFolder(folder: SyncFolderInsert): string {
@@ -254,6 +272,34 @@ export class StateManager implements IStateManager {
       .prepare('SELECT * FROM sync_folders WHERE lguplus_folder_id = ?')
       .get(lguplusFolderId) as Record<string, unknown> | undefined
     return row ? this.mapFolderRow(row) : null
+  }
+
+  bulkUpdateFilePaths(folderId: string, oldPathPrefix: string, newPathPrefix: string): number {
+    const result = this.db
+      .prepare(
+        `UPDATE sync_files
+         SET file_path = REPLACE(file_path, ?, ?),
+             download_path = CASE
+               WHEN download_path IS NOT NULL
+               THEN REPLACE(download_path, ?, ?)
+               ELSE NULL
+             END,
+             updated_at = datetime('now')
+         WHERE folder_id = ?`,
+      )
+      .run(oldPathPrefix, newPathPrefix, oldPathPrefix, newPathPrefix, folderId)
+    return result.changes
+  }
+
+  markFolderFilesDeleted(folderId: string): number {
+    const result = this.db
+      .prepare(
+        `UPDATE sync_files
+         SET status = 'source_deleted', updated_at = datetime('now')
+         WHERE folder_id = ? AND status != 'source_deleted'`,
+      )
+      .run(folderId)
+    return result.changes
   }
 
   // ── Event Log ──

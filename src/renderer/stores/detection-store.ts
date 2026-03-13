@@ -197,7 +197,7 @@ export const useDetectionStore = create<DetectionStore>((set, get) => ({
   },
 
   handleStatusChanged: (event) => {
-    set((state) => {
+    set((_state) => {
       const updates: Partial<DetectionState> = {
         status: event.status,
         currentSessionId: event.sessionId,

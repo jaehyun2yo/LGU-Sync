@@ -7,6 +7,7 @@ import type { IConfigManager } from './types/config.types'
 import type { ILogger } from './types/logger.types'
 import type { IFileDetector } from './types/file-detector.types'
 import type { IFolderDiscovery } from './types/folder.types'
+import { filterPathSegments } from './path-utils'
 
 export type DetectionServiceStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'recovering'
 export type DetectionStopReason = 'manual' | 'crash' | 'app-quit' | 'error'
@@ -82,36 +83,41 @@ export class DetectionService implements IDetectionService {
     this.emitStatusChange()
 
     try {
-      const totalSteps = source === 'auto-start' ? 6 : 5
+      const totalSteps = 6
       let currentStep = 0
 
       // 1. 폴더 발견 (미등록 폴더 자동 등록)
+      //    실패해도 기존 DB 폴더 기준으로 1-1 단계에서 디렉토리를 생성하므로 중단하지 않음
       this.eventBus.emit('detection:start-progress', {
         step: 'folder-discovery', message: '폴더 스캔 중...', current: ++currentStep, total: totalSteps,
       })
+      let discoverySucceeded = false
       try {
-        await this.folderDiscovery.discoverFolders()
-      } catch (error) {
-        this.logger.warn('Folder discovery failed during detection start', {
-          error: (error as Error).message,
+        const discoveryResult = await this.folderDiscovery.discoverFolders()
+        discoverySucceeded = true
+        this.logger.info('Folder discovery completed', {
+          total: discoveryResult.total,
+          newFolders: discoveryResult.newFolders,
         })
+      } catch (error) {
+        this.logger.warn(
+          'Folder discovery failed — will use existing DB folders for directory structure',
+          { error: (error as Error).message },
+        )
       }
 
-      // 1-1. 다운로드 폴더에 디렉토리 구조 생성
+      // 1-1. 다운로드 폴더에 디렉토리 구조 사전 생성
+      //      discovery 성공/실패 여부와 무관하게 항상 실행
+      //      (discovery 실패 시 기존 DB 폴더 기준, 성공 시 갱신된 DB 기준)
       this.eventBus.emit('detection:start-progress', {
-        step: 'download-folders', message: '다운로드 폴더 생성 중...', current: ++currentStep, total: totalSteps,
+        step: 'download-folders',
+        message: discoverySucceeded ? '다운로드 폴더 생성 중...' : '다운로드 폴더 생성 중 (폴더 스캔 실패, DB 기준)...',
+        current: ++currentStep,
+        total: totalSteps,
       })
       await this.createDownloadFolders()
 
-      // 2. 다운타임 복구 (auto-start 시)
-      if (source === 'auto-start') {
-        this.eventBus.emit('detection:start-progress', {
-          step: 'recovery', message: '다운타임 복구 중...', current: ++currentStep, total: totalSteps,
-        })
-        await this.checkAndRecover()
-      }
-
-      // 3. DB에 감지 세션 생성
+      // 2. DB에 감지 세션 생성
       this.eventBus.emit('detection:start-progress', {
         step: 'session', message: '세션 준비 중...', current: ++currentStep, total: totalSteps,
       })
@@ -133,13 +139,19 @@ export class DetectionService implements IDetectionService {
         }
       }
 
-      // 5. SyncEngine 시작 (이미 running이면 skip)
+      // 4. SyncEngine 시작 (이미 running이면 skip)
       this.eventBus.emit('detection:start-progress', {
         step: 'engine', message: '감지 엔진 시작 중...', current: ++currentStep, total: totalSteps,
       })
       if (this.engine.status !== 'syncing') {
         await this.engine.start()
       }
+
+      // 5. 다운타임 갭 복구 (SyncEngine 구독 후 실행 → 감지 파일이 실제 다운로드됨)
+      this.eventBus.emit('detection:start-progress', {
+        step: 'recovery', message: '다운타임 복구 중...', current: ++currentStep, total: totalSteps,
+      })
+      await this.checkAndRecover()
 
       // 6. DLQ 자동 재시도 시작
       this.eventBus.emit('detection:start-progress', {
@@ -260,33 +272,40 @@ export class DetectionService implements IDetectionService {
     })
   }
 
-  /** 다운로드 폴더에 LGU+ 폴더 구조를 미리 생성 */
+  /** 다운로드 폴더에 LGU+ 폴더 구조를 미리 생성
+   *  - GUEST 등 제외 세그먼트를 filterPathSegments로 정리하여 downloadOnly()의 경로와 일치시킴
+   *  - 개별 폴더 생성 실패는 무시하되 실패 건수를 로그로 남김
+   */
   private async createDownloadFolders(): Promise<void> {
     try {
       const tempPath = this.config.get('system').tempDownloadPath
       const folders = this.state.getFolders()
 
       let created = 0
+      let failed = 0
       for (const folder of folders) {
         const folderPath = folder.lguplus_folder_path
         if (!folderPath) continue
 
-        // lguplus_folder_path는 '/올리기전용/업체A/sub1' 형태
-        const segments = folderPath.split('/').filter(Boolean)
+        // filterPathSegments로 GUEST 등 제외 세그먼트 정리 (downloadOnly()와 동일한 방식)
+        const rawSegments = folderPath.split('/').filter(Boolean)
+        const segments = filterPathSegments(rawSegments)
         if (segments.length === 0) continue
 
         const dirPath = join(tempPath, ...segments)
         try {
           await mkdir(dirPath, { recursive: true })
           created++
-        } catch {
-          // ignore individual folder creation errors
+        } catch (err) {
+          failed++
+          this.logger.debug('Failed to create individual download directory', {
+            dirPath,
+            error: (err as Error).message,
+          })
         }
       }
 
-      if (created > 0) {
-        this.logger.info('Download directories created', { created, total: folders.length })
-      }
+      this.logger.info('Download directories prepared', { created, failed, total: folders.length })
     } catch (error) {
       this.logger.warn('Failed to create download directories', {
         error: (error as Error).message,
@@ -294,37 +313,32 @@ export class DetectionService implements IDetectionService {
     }
   }
 
-  /** 다운타임 복구: 마지막 세션의 비정상 종료 감지 → 누락 파일 복구 */
+  /** 다운타임 갭 복구: 크래시 세션 마감 + 중지-재시작 사이 누락 파일 감지·다운로드 */
   private async checkAndRecover(): Promise<{ recoveredFiles: number; failedFiles: number }> {
     const lastSession = this.state.getLastDetectionSession()
     if (!lastSession) return { recoveredFiles: 0, failedFiles: 0 }
 
-    // stopped_at이 NULL이면 비정상 종료
+    // stopped_at이 NULL이면 비정상 종료 → 세션 마감 + checkpoint 되돌림
     const isCrash = lastSession.stopped_at === null
-    if (!isCrash) return { recoveredFiles: 0, failedFiles: 0 }
+    if (isCrash) {
+      this.logger.warn('Detected abnormal shutdown, closing crashed session', {
+        sessionId: lastSession.id,
+        lastHistoryNo: lastSession.last_history_no,
+      })
+      this.state.endDetectionSession(lastSession.id, {
+        stop_reason: 'crash',
+        files_detected: lastSession.files_detected,
+        files_downloaded: lastSession.files_downloaded,
+        files_failed: lastSession.files_failed,
+        last_history_no: lastSession.last_history_no,
+      })
+      const fromHistoryNo = lastSession.last_history_no ?? 0
+      this.state.saveCheckpoint('last_history_no', String(fromHistoryNo))
+    }
 
-    this.logger.warn('Detected abnormal shutdown, starting recovery', {
-      sessionId: lastSession.id,
-      lastHistoryNo: lastSession.last_history_no,
-    })
-
+    // 정상/비정상 모두: 현재 checkpoint 이후 누락 파일을 즉시 감지하여 다운로드
     this._status = 'recovering'
     this.emitStatusChange()
-
-    // 비정상 종료 세션 마감
-    this.state.endDetectionSession(lastSession.id, {
-      stop_reason: 'crash',
-      files_detected: lastSession.files_detected,
-      files_downloaded: lastSession.files_downloaded,
-      files_failed: lastSession.files_failed,
-      last_history_no: lastSession.last_history_no,
-    })
-
-    // last_history_no 이후의 히스토리를 다시 스캔
-    const fromHistoryNo = lastSession.last_history_no ?? 0
-
-    // checkpoint를 복구 시점으로 되돌리고 forceCheck 실행
-    this.state.saveCheckpoint('last_history_no', String(fromHistoryNo))
 
     let recoveredFiles = 0
     let failedFiles = 0
@@ -332,13 +346,15 @@ export class DetectionService implements IDetectionService {
     try {
       const detected = await this.detector.forceCheck()
       recoveredFiles = detected.length
-      // 감지된 파일은 SyncEngine이 자동으로 처리
+      // SyncEngine이 이미 시작된 상태이므로 감지된 파일은 자동으로 다운로드됨
     } catch (error) {
       this.logger.error('Recovery failed', error as Error)
       failedFiles++
     }
 
-    this.logger.info('Recovery completed', { recoveredFiles, failedFiles })
+    if (recoveredFiles > 0 || isCrash) {
+      this.logger.info('Gap recovery completed', { recoveredFiles, failedFiles, isCrash })
+    }
     return { recoveredFiles, failedFiles }
   }
 

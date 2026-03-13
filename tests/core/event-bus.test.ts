@@ -116,6 +116,31 @@ describe('EventBus', () => {
     expect(handler).toHaveBeenCalledTimes(2)
   })
 
+  it('핸들러 에러 발생해도 나머지 핸들러 정상 실행', () => {
+    const bus = new EventBus()
+    const h1 = vi.fn()
+    const h2 = vi.fn(() => { throw new Error('handler error') })
+    const h3 = vi.fn()
+
+    bus.on('sync:started', h1)
+    bus.on('sync:started', h2)
+    bus.on('sync:started', h3)
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    bus.emit('sync:started', { timestamp: Date.now() })
+
+    expect(h1).toHaveBeenCalledOnce()
+    expect(h2).toHaveBeenCalledOnce()
+    expect(h3).toHaveBeenCalledOnce()
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[EventBus] Handler error'),
+      expect.any(Error),
+    )
+
+    consoleSpy.mockRestore()
+  })
+
   it('여러 이벤트 타입의 타입 안전성이 보장된다', () => {
     const bus = new EventBus()
     const downloadHandler = vi.fn()

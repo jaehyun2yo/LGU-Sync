@@ -579,6 +579,64 @@ describe('FileDetector', () => {
     })
   })
 
+  // ── 에러 복원력 ──
+
+  describe('에러 복원력', () => {
+    it('핸들러 에러 시에도 detection:found 이벤트 발행', async () => {
+      const errorHandler = vi.fn(() => { throw new Error('handler error') })
+      const foundHandler = vi.fn()
+
+      detector.onFilesDetected(errorHandler)
+      eventBus.on('detection:found', foundHandler)
+
+      await detector.forceCheck()
+
+      expect(foundHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          files: expect.arrayContaining([
+            expect.objectContaining({ fileName: 'drawing1.dxf' }),
+          ]),
+          strategy: 'polling',
+        }),
+      )
+    })
+
+    it('checkpoint가 notifyDetection 이후에 갱신됨', async () => {
+      detector.onFilesDetected(() => {
+        // handler 호출 시점에 checkpoint가 아직 갱신되지 않았는지 확인
+        expect(mockState.saveCheckpoint).not.toHaveBeenCalled()
+      })
+
+      await detector.forceCheck()
+
+      expect(mockState.saveCheckpoint).toHaveBeenCalledWith('last_history_no', '101')
+    })
+
+    it('연속 N회 실패 시 detection:poll-error 이벤트 발행', async () => {
+      ;(mockClient.getUploadHistory as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('network error'),
+      )
+
+      const pollErrorHandler = vi.fn()
+      eventBus.on('detection:poll-error', pollErrorHandler)
+
+      // ERROR_NOTIFY_THRESHOLD(3)회 미만 → 이벤트 없음
+      for (let i = 0; i < 2; i++) {
+        await detector.forceCheck()
+      }
+      expect(pollErrorHandler).not.toHaveBeenCalled()
+
+      // 3회째 실패 → 이벤트 발행
+      await detector.forceCheck()
+      expect(pollErrorHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          consecutiveFailures: 3,
+          error: 'network error',
+        }),
+      )
+    })
+  })
+
   // ── 확장자 중복 방지 ──
 
   describe('확장자 중복 방지', () => {

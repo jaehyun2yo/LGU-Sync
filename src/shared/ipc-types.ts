@@ -95,35 +95,7 @@ export interface SyncFileInfo {
   status: SyncFileStatus
   syncedAt?: string
   error?: string
-}
-
-export interface SyncFileDetail extends SyncFileInfo {
-  lguplusFileId: string | null
-  lguplusFolderId: string
-  detectedAt: string
-  detectionSource: 'polling' | 'snapshot'
-  webhardFileId?: string
-  retryCount: number
-  lastError?: string
-  history: Array<{ action: string; timestamp: string; details?: string }>
-}
-
-export interface FileListRequest {
-  folderId?: string
-  status?: SyncFileStatus
-  sortBy?: 'name' | 'date' | 'size' | 'status'
-  sortOrder?: 'asc' | 'desc'
-  page?: number
-  pageSize?: number
-}
-
-export interface FileSearchRequest {
-  query: string
-  folderId?: string
-  dateFrom?: string
-  dateTo?: string
-  page?: number
-  pageSize?: number
+  downloadPath?: string
 }
 
 export interface FolderInfoIpc {
@@ -133,16 +105,6 @@ export interface FolderInfoIpc {
   fileCount: number
   syncEnabled: boolean
   lastSyncAt?: string
-}
-
-export interface FolderTreeNode extends FolderInfoIpc {
-  children: FolderTreeNode[]
-  depth: number
-}
-
-export interface FolderToggleRequest {
-  folderId: string
-  enabled: boolean
 }
 
 // ── Log types ──
@@ -170,29 +132,6 @@ export interface LogExportRequest {
   format: 'csv' | 'json'
   dateFrom?: string
   dateTo?: string
-}
-
-// ── Stats types ──
-
-export interface SyncSummary {
-  period: string
-  totalFiles: number
-  successFiles: number
-  failedFiles: number
-  totalBytes: number
-  averageSpeedBps: number
-  byFolder: Array<{ folderName: string; fileCount: number; totalBytes: number }>
-}
-
-export interface ChartRequest {
-  type: 'daily' | 'hourly'
-  dateFrom: string
-  dateTo: string
-}
-
-export interface ChartData {
-  labels: string[]
-  datasets: Array<{ label: string; data: number[]; color?: string }>
 }
 
 // ── Settings types ──
@@ -233,21 +172,6 @@ export interface ConnectionTestResult {
   serverVersion?: string
 }
 
-// ── Auth types ──
-
-export interface LoginRequest {
-  username: string
-  password: string
-  saveCredentials?: boolean
-}
-
-export interface AuthStatus {
-  authenticated: boolean
-  username?: string
-  sessionValid: boolean
-  lastLoginAt?: string
-}
-
 // ── Notification types ──
 
 export type NotificationType = 'info' | 'success' | 'warning' | 'error'
@@ -259,127 +183,6 @@ export interface NotificationItem {
   message: string
   read: boolean
   createdAt: string
-}
-
-// ── Discovery types ──
-
-export interface DiscoveryResult {
-  total: number
-  newFolders: number
-  existingFolders: number
-  folders: Array<{
-    id: string
-    lguplusFolderId: string
-    folderName: string
-    isNew: boolean
-  }>
-}
-
-// ── Migration types ──
-
-export interface MigrationFolderInfo {
-  id: string
-  lguplusFolderId: string
-  folderName: string
-  fileCount: number
-  syncedCount: number
-  totalSize: number
-  children?: MigrationFolderInfo[]
-}
-
-export interface MigrationStartRequest {
-  folderIds: string[]
-  forceRescan?: boolean
-}
-
-export interface MigrationProgress {
-  folderId: string
-  folderName: string
-  currentFile: string
-  completedFiles: number
-  totalFiles: number
-  completedBytes: number
-  totalBytes: number
-}
-
-export interface MigrationResult {
-  scannedFolders: number
-  newFolders: number
-  scannedFiles: number
-  syncedFiles: number
-  failedFiles: number
-  durationMs: number
-}
-
-// ── Failed event ──
-
-export interface FailedEvent {
-  id: string
-  fileName: string
-  folderPath: string
-  fileSize: number
-  errorCode: string
-  errorMessage: string
-  failedAt: string
-  retryCount: number
-  canRetry: boolean
-}
-
-// ── Test types ──
-
-export interface TestDownloadRequest {
-  folderIds: string[]
-  forceRescan?: boolean
-}
-
-export interface TestDownloadResult {
-  scannedFiles: number
-  downloadedFiles: number
-  failedFiles: number
-  durationMs: number
-  results: Array<{
-    fileId: string
-    fileName: string
-    success: boolean
-    error?: string
-    downloadPath?: string
-    fileSize: number
-  }>
-}
-
-export interface TestUploadRequest {
-  folderIds: string[]
-}
-
-export interface TestUploadResult {
-  uploadedFiles: number
-  failedFiles: number
-  durationMs: number
-  results: Array<{
-    fileId: string
-    fileName: string
-    success: boolean
-    error?: string
-  }>
-}
-
-export interface TestFullSyncResult extends FullSyncResult {
-  results: Array<{
-    fileId: string
-    fileName: string
-    downloadSuccess: boolean
-    uploadSuccess: boolean
-    error?: string
-  }>
-}
-
-export interface TestProgressEvent {
-  testType: 'download' | 'upload' | 'full-sync'
-  currentFile: string
-  completedFiles: number
-  totalFiles: number
-  phase: 'scanning' | 'downloading' | 'uploading'
-  error?: string
 }
 
 // ── IPC Channel Map (invoke/handle) ──
@@ -396,33 +199,17 @@ export interface IpcChannelMap {
   'sync:reset-circuit': { request: { circuitName: string }; response: ApiResponse<void> }
 
   // Data queries
-  'files:list': { request: FileListRequest; response: ApiResponse<Paginated<SyncFileInfo>> }
-  'files:detail': { request: { fileId: string }; response: ApiResponse<SyncFileDetail> }
-  'files:search': { request: FileSearchRequest; response: ApiResponse<Paginated<SyncFileInfo>> }
+  'files:show-in-folder': { request: { filePath: string }; response: ApiResponse<void> }
 
   // Folders
   'folders:list': {
     request: { parentId?: string }
     response: ApiResponse<FolderInfoIpc[]>
   }
-  'folders:tree': { request: void; response: ApiResponse<FolderTreeNode[]> }
-  'folders:toggle': { request: FolderToggleRequest; response: ApiResponse<void> }
-  'folders:discover': { request: void; response: ApiResponse<DiscoveryResult> }
-
-  // Migration
-  'migration:scan': { request: void; response: ApiResponse<MigrationFolderInfo[]> }
-  'migration:start': { request: MigrationStartRequest; response: ApiResponse<MigrationResult> }
 
   // Logs
   'logs:list': { request: LogListRequest; response: ApiResponse<Paginated<LogEntry>> }
   'logs:export': { request: LogExportRequest; response: ApiResponse<{ filePath: string }> }
-
-  // Stats
-  'stats:summary': {
-    request: { period?: 'today' | 'week' | 'month' }
-    response: ApiResponse<SyncSummary>
-  }
-  'stats:chart': { request: ChartRequest; response: ApiResponse<ChartData> }
 
   // Settings
   'settings:get': { request: void; response: ApiResponse<AppSettings> }
@@ -432,35 +219,12 @@ export interface IpcChannelMap {
     response: ApiResponse<ConnectionTestResult>
   }
 
-  // Auth
-  'auth:login': { request: LoginRequest; response: ApiResponse<AuthStatus> }
-  'auth:logout': { request: void; response: ApiResponse<void> }
-  'auth:status': { request: void; response: ApiResponse<AuthStatus> }
-
-  // Test
-  'test:scan-folders': {
-    request: { forceRefresh?: boolean } | void
-    response: ApiResponse<{ folders: MigrationFolderInfo[]; cachedAt: number | null }>
-  }
-  'test:download-only': { request: TestDownloadRequest; response: ApiResponse<TestDownloadResult> }
-  'test:upload-only': { request: TestUploadRequest; response: ApiResponse<TestUploadResult> }
-  'test:full-sync': { request: FullSyncRequest; response: ApiResponse<TestFullSyncResult> }
+  // Test (RealtimeDetectionPage에서 사용)
   'test:open-download-folder': { request: void; response: ApiResponse<void> }
   'test:clear-downloads': {
     request: void
     response: ApiResponse<{ deletedFiles: number; deletedFolders: number; resetRecords: number }>
   }
-  'test:realtime-start': {
-    request: RealtimeTestStartRequest
-    response: ApiResponse<void>
-  }
-  'test:realtime-stop': {
-    request: void
-    response: ApiResponse<void>
-  }
-
-  // Failed / DLQ
-  'failed:list': { request: PaginationRequest; response: ApiResponse<Paginated<FailedEvent>> }
 
   // Detection (실시간 감지 서비스)
   'detection:start': { request: DetectionStartRequest; response: ApiResponse<void> }
@@ -672,8 +436,6 @@ export interface IpcEventMap {
   'opercode:event': OperCodeEvent
   'auth:expired': AuthExpiredEvent
   'error:critical': CriticalErrorEvent
-  'test:progress': TestProgressEvent
-  'test:realtime-event': RealtimeTestEvent
 }
 
 // ── ElectronAPI (exposed via contextBridge) ──

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Eye, EyeOff, Check, X, Loader, Save, Volume2, Play } from 'lucide-react'
+import { Eye, EyeOff, Check, X, Loader, Save, Volume2, Play, ScrollText } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { useSettingsStore } from '../stores/settings-store'
-import { soundPlayer, SOUND_PRESETS } from '../lib/notification-sound'
-import type { AppSettings, ConnectionTestResult } from '../../shared/ipc-types'
+import { soundPlayer } from '../lib/notification-sound'
+import { LogViewerPage } from './LogViewerPage'
+import type { ConnectionTestResult } from '../../shared/ipc-types'
 import type { NotificationEventType, SoundPresetId, EventNotificationRule } from '../../core/types/config.types'
 
 // ── Tab config ──
@@ -515,6 +516,8 @@ function NotificationTab() {
 
 function SystemTab() {
   const { settings, updateSettings } = useSettingsStore()
+  const [showSystemLog, setShowSystemLog] = useState(false)
+
   if (!settings) return null
 
   return (
@@ -553,6 +556,51 @@ function SystemTab() {
           unit="일"
         />
       </Section>
+
+      <Section title="시스템 로그">
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            동기화 엔진의 내부 시스템 로그 (debug/info/warn/error)를 확인합니다.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowSystemLog((v) => !v)}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors',
+              showSystemLog
+                ? 'bg-info text-white hover:bg-info/90'
+                : 'bg-accent text-accent-foreground hover:bg-accent/80',
+            )}
+          >
+            <ScrollText className="h-4 w-4" />
+            {showSystemLog ? '시스템 로그 닫기' : '시스템 로그 보기'}
+          </button>
+        </div>
+      </Section>
+
+      {showSystemLog && <SystemLogPanel onClose={() => setShowSystemLog(false)} />}
+    </div>
+  )
+}
+
+// ── System Log Panel (inline LogViewerPage) ──
+
+function SystemLogPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="border border-border rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 bg-muted/50 border-b border-border">
+        <span className="text-sm font-medium text-card-foreground">시스템 로그</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-card-foreground transition-colors"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="h-[500px] overflow-auto">
+        <LogViewerPage />
+      </div>
     </div>
   )
 }

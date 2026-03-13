@@ -29,6 +29,14 @@ import {
   FileDownloadTransferError,
 } from '../../src/core/errors'
 
+// Mock node:fs/promises to avoid real filesystem operations in tests
+vi.mock('node:fs/promises', () => ({
+  mkdir: vi.fn().mockResolvedValue(undefined),
+  rename: vi.fn().mockResolvedValue(undefined),
+  unlink: vi.fn().mockResolvedValue(undefined),
+  rm: vi.fn().mockResolvedValue(undefined),
+}))
+
 // ── Mock Factories ──
 
 function createMockDetector(): IFileDetector & {
@@ -113,6 +121,7 @@ function createMockState(): IStateManager {
     getFilesByFolder: vi.fn().mockReturnValue([]),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
     getFileByLguplusFileId: vi.fn().mockReturnValue(null),
+    updateFileInfo: vi.fn(),
     saveFolder: vi.fn().mockReturnValue('folder-id'),
     updateFolder: vi.fn(),
     getFolders: vi.fn().mockReturnValue([]),
@@ -123,6 +132,8 @@ function createMockState(): IStateManager {
       lguplus_folder_name: 'test-folder',
       enabled: true,
     })),
+    bulkUpdateFilePaths: vi.fn().mockReturnValue(0),
+    markFolderFilesDeleted: vi.fn().mockReturnValue(0),
     logEvent: vi.fn(),
     getEvents: vi.fn().mockReturnValue([]),
     addToDlq: vi.fn(),
@@ -136,6 +147,12 @@ function createMockState(): IStateManager {
     saveFolderChange: vi.fn().mockReturnValue(1),
     getFolderChanges: vi.fn().mockReturnValue([]),
     updateFolderChange: vi.fn(),
+    createDetectionSession: vi.fn().mockReturnValue('session-id'),
+    endDetectionSession: vi.fn(),
+    updateDetectionSession: vi.fn(),
+    getLastDetectionSession: vi.fn().mockReturnValue(null),
+    getDetectionSessions: vi.fn().mockReturnValue({ items: [], total: 0 }),
+    resetDownloadedFiles: vi.fn().mockReturnValue(0),
     initialize: vi.fn(),
     close: vi.fn(),
   }
@@ -220,7 +237,7 @@ describe('Pipeline Integration: FileDetector → SyncEngine → LGUplusClient', 
   // ── 1. 전체 파이프라인 ──
 
   describe('전체 파이프라인 흐름', () => {
-    it('감지 → 다운로드 → 업로드 → file:completed 이벤트까지 전체 흐름', async () => {
+    it('감지 → 다운로드 → file:completed 이벤트까지 전체 흐름', async () => {
       const completedHandler = vi.fn()
       eventBus.on('file:completed', completedHandler)
 
@@ -235,10 +252,7 @@ describe('Pipeline Integration: FileDetector → SyncEngine → LGUplusClient', 
       // 다운로드 호출 확인
       expect(lguplus.downloadFile).toHaveBeenCalled()
 
-      // 업로드 호출 확인
-      expect(uploader.uploadFile).toHaveBeenCalled()
-
-      // file:completed 이벤트 발행 확인
+      // file:completed 이벤트 발행 확인 (upload 없이 download -> completed)
       expect(completedHandler).toHaveBeenCalledWith(
         expect.objectContaining({
           fileName: 'drawing.dxf',
@@ -294,20 +308,16 @@ describe('Pipeline Integration: FileDetector → SyncEngine → LGUplusClient', 
       expect(failHandler).toHaveBeenCalled()
     })
 
-    it('업로드 실패 시 상태가 ul_failed로 업데이트된다', async () => {
-      ;(uploader.uploadFile as ReturnType<typeof vi.fn>).mockResolvedValue({
-        success: false,
-        error: 'Upload connection failed',
-      })
-
+    it('다운로드 성공 시 completed 상태로 업데이트된다', async () => {
       await engine.start()
       detector._emit([makeDetectedFile()])
       await vi.advanceTimersByTimeAsync(100)
 
+      // syncFile은 download only + completed (upload 없음)
       expect(state.updateFileStatus).toHaveBeenCalledWith(
         expect.any(String),
-        'ul_failed',
-        expect.objectContaining({ last_error: expect.any(String) }),
+        'completed',
+        expect.objectContaining({ upload_completed_at: expect.any(String) }),
       )
     })
 

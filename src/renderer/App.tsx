@@ -2,55 +2,29 @@ import { useEffect, useCallback } from 'react'
 import { Layout } from './components/Layout'
 import { useUiStore, type PageId } from './stores/ui-store'
 import { useSyncStore } from './stores/sync-store'
+import { useDetectionStore } from './stores/detection-store'
 import { useNotificationStore } from './stores/notification-store'
 import { useIpcEvent } from './hooks/useIpcEvent'
 import { useNotificationManager } from './lib/notification-manager'
 
 // Lazy page components
 import { DashboardPage } from './pages/DashboardPage'
-import { FileExplorerPage } from './pages/FileExplorerPage'
-import { FolderSettingsPage } from './pages/FolderSettingsPage'
-import { LogViewerPage } from './pages/LogViewerPage'
-import { StatisticsPage } from './pages/StatisticsPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { MigrationPage } from './pages/MigrationPage'
-import { TestPage } from './pages/TestPage'
 import { RealtimeDetectionPage } from './pages/RealtimeDetectionPage'
 
 function PageRouter() {
   const currentPage = useUiStore((s) => s.currentPage)
 
-  const activePage = (() => {
-    switch (currentPage) {
-      case 'dashboard':
-        return <DashboardPage />
-      case 'file-explorer':
-        return <FileExplorerPage />
-      case 'folder-settings':
-        return <FolderSettingsPage />
-      case 'sync-log':
-        return <LogViewerPage />
-      case 'statistics':
-        return <StatisticsPage />
-      case 'migration':
-        return <MigrationPage />
-      case 'realtime-detection':
-        return <RealtimeDetectionPage />
-      case 'settings':
-        return <SettingsPage />
-      default:
-        return <DashboardPage />
-    }
-  })()
-
-  return (
-    <>
-      {currentPage !== 'test' && activePage}
-      <div className={currentPage === 'test' ? 'flex flex-col h-full' : 'hidden'}>
-        <TestPage />
-      </div>
-    </>
-  )
+  switch (currentPage) {
+    case 'dashboard':
+      return <DashboardPage />
+    case 'realtime-detection':
+      return <RealtimeDetectionPage />
+    case 'settings':
+      return <SettingsPage />
+    default:
+      return <DashboardPage />
+  }
 }
 
 function App() {
@@ -61,10 +35,15 @@ function App() {
     handleFileCompleted,
     handleFileFailed,
     handleStatusChanged,
-    handleOperCodeEvent,
     handleScanProgress,
     handleNewFiles,
   } = useSyncStore()
+  const {
+    fetchStatus: detectionFetchStatus,
+    handleDetectionEvent,
+    handleStatusChanged: handleDetectionStatusChanged,
+    handleStartProgress,
+  } = useDetectionStore()
   const { fetchNotifications } = useNotificationStore()
 
   // Notification orchestrator
@@ -73,18 +52,18 @@ function App() {
   // Fetch initial data
   useEffect(() => {
     fetchStatus()
+    detectionFetchStatus()
     fetchNotifications()
     // Periodic status refresh
     const interval = setInterval(fetchStatus, 10000)
     return () => clearInterval(interval)
-  }, [fetchStatus, fetchNotifications])
+  }, [fetchStatus, detectionFetchStatus, fetchNotifications])
 
-  // IPC event listeners
+  // IPC event listeners — sync events
   const onProgress = useCallback(handleProgress, [handleProgress])
   const onFileCompleted = useCallback(handleFileCompleted, [handleFileCompleted])
   const onFileFailed = useCallback(handleFileFailed, [handleFileFailed])
   const onStatusChanged = useCallback(handleStatusChanged, [handleStatusChanged])
-  const onOperCodeEvent = useCallback(handleOperCodeEvent, [handleOperCodeEvent])
   const onScanProgress = useCallback(handleScanProgress, [handleScanProgress])
   const onNewFiles = useCallback(handleNewFiles, [handleNewFiles])
 
@@ -92,9 +71,17 @@ function App() {
   useIpcEvent('sync:file-completed', onFileCompleted)
   useIpcEvent('sync:file-failed', onFileFailed)
   useIpcEvent('sync:status-changed', onStatusChanged)
-  useIpcEvent('opercode:event', onOperCodeEvent)
   useIpcEvent('detection:scan-progress', onScanProgress)
   useIpcEvent('detection:new-files', onNewFiles)
+
+  // IPC event listeners — detection events (global, survives page navigation)
+  const onDetectionEvent = useCallback(handleDetectionEvent, [handleDetectionEvent])
+  const onDetectionStatusChanged = useCallback(handleDetectionStatusChanged, [handleDetectionStatusChanged])
+  const onStartProgress = useCallback(handleStartProgress, [handleStartProgress])
+
+  useIpcEvent('detection:event', onDetectionEvent)
+  useIpcEvent('detection:status-changed', onDetectionStatusChanged)
+  useIpcEvent('detection:start-progress', onStartProgress)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -102,13 +89,8 @@ function App() {
       if (!e.ctrlKey) return
       const shortcuts: Record<string, PageId> = {
         '1': 'dashboard',
-        '2': 'file-explorer',
-        '3': 'folder-settings',
-        '4': 'sync-log',
-        '5': 'statistics',
-        '6': 'migration',
-        '7': 'realtime-detection',
-        '8': 'test',
+        '2': 'realtime-detection',
+        '3': 'settings',
         ',': 'settings',
       }
       const page = shortcuts[e.key]

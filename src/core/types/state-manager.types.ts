@@ -30,6 +30,7 @@ export interface IStateManager {
   // Sync files
   saveFile(file: SyncFileInsert): string
   updateFileStatus(fileId: string, status: SyncFileStatus, extra?: Partial<SyncFileRow>): void
+  updateFileInfo(fileId: string, data: { file_name?: string; file_path?: string; download_path?: string; folder_id?: string }): void
   getFile(fileId: string): SyncFileRow | null
   getFilesByFolder(folderId: string, options?: QueryOptions): SyncFileRow[]
   getFileByHistoryNo(historyNo: number): SyncFileRow | null
@@ -41,6 +42,10 @@ export interface IStateManager {
   getFolders(enabledOnly?: boolean): SyncFolderRow[]
   getFolder(id: string): SyncFolderRow | null
   getFolderByLguplusId(lguplusFolderId: string): SyncFolderRow | null
+  /** Folder rename/move 시 하위 파일의 file_path, download_path를 일괄 변경 */
+  bulkUpdateFilePaths(folderId: string, oldPathPrefix: string, newPathPrefix: string): number
+  /** Folder 삭제 시 소속 파일 전부 source_deleted 처리 */
+  markFolderFilesDeleted(folderId: string): number
 
   // Event log
   logEvent(event: SyncEventInsert): void

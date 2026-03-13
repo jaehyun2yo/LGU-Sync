@@ -105,15 +105,29 @@ These specs are split into index + sub-files (each sub-file < 500 lines):
 
 ## Skills & Commands
 
+### Skill Priority Rule
+
+**CRITICAL: Project commands ALWAYS take priority over superpowers/plugin generic workflows.**
+
+When a user message matches a project skill trigger keyword below, invoke the **project command via Skill tool FIRST** — before superpowers:brainstorming, superpowers:writing-plans, or any other generic workflow. Project commands are specifically designed for this codebase and override generic alternatives.
+
+Priority order:
+1. Project commands (this table below) — invoke via `Skill` tool
+2. Project slash commands (`/check`, `/review`, `/post-code`)
+3. Superpowers/plugin skills — only when no project command matches
+
 ### Skill Triggers
 
-| Keyword | Skill | Description |
-|---------|-------|-------------|
-| "다운로드 팀", "다운로드팀" | `download-pipeline-team` | Download pipeline multi-agent team |
-| "감지 팀", "감지팀" | `realtime-detection-team` | Realtime detection multi-agent team |
-| "웹하드팀", "웹하드 팀" | `webhard-team` | Webhard dedicated agent team |
-| "계획", "plan", "설계" | `project-planning` | Structured work planning |
-| "세션정리", "마무리", "handoff" | `session-handoff` | Session end + handoff |
+| Keyword | Command | Description |
+|---------|---------|-------------|
+| "다운로드 팀", "다운로드팀" | `/download-pipeline-team` | Download pipeline multi-agent team |
+| "감지 팀", "감지팀" | `/realtime-detection-team` | Realtime detection multi-agent team |
+| "웹하드팀", "웹하드 팀" | `/webhard-team` | Webhard dedicated agent team |
+| "계획", "plan", "설계" | `/project-planning` | Structured work planning |
+| "세션정리", "마무리", "handoff" | `/session-handoff` | Session end + handoff |
+| "진단", "audit", "프로젝트 분석" | `/auditing-project-readiness` | Project setup diagnosis + fix |
+| "context", "컨텍스트", "느려졌다" | `/context-check` | Context threshold response + recovery |
+| "tdd", "테스트 먼저", "리팩토링" | `/test-and-refactor` | TDD cycle + refactoring |
 
 ### Slash Commands
 
@@ -122,6 +136,9 @@ These specs are split into index + sub-files (each sub-file < 500 lines):
 | `/check` | typecheck + lint + test sequential run |
 | `/review` | Changed code review + refactoring suggestions |
 | `/post-code` | Full post-coding pipeline (typecheck -> lint -> test -> review -> handoff) |
+| `/download-pipeline-team` | Download pipeline domain team (6 roles) |
+| `/realtime-detection-team` | Realtime detection domain team (5 roles) |
+| `/project-planning` | Structured planning before implementation |
 
 ## Design Documents
 

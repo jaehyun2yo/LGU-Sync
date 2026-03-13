@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import type {
-  SyncStatus,
   SyncFileInfo,
   FullSyncResult,
   SyncProgressEvent,
@@ -32,13 +31,6 @@ interface SyncState {
   todayBytes: number
   activeTransfers: ActiveTransfer[]
   recentFiles: SyncFileInfo[]
-  recentEvents: Array<{
-    operCode: string
-    fileName: string
-    filePath: string
-    folderId: string
-    timestamp: string
-  }>
   circuits: Record<string, 'CLOSED' | 'OPEN' | 'HALF_OPEN'>
   failedCount: number
   fullSyncProgress: {
@@ -67,7 +59,6 @@ interface SyncActions {
   handleFileCompleted: (event: FileCompletedEvent) => void
   handleFileFailed: (event: FileFailedEvent) => void
   handleStatusChanged: (event: StatusChangedEvent) => void
-  handleOperCodeEvent: (event: { operCode: string; fileName: string; filePath: string; folderId: string; timestamp: string }) => void
   handleScanProgress: (event: ScanProgressEvent) => void
   handleNewFiles: (event: NewFilesEvent) => void
 }
@@ -85,7 +76,6 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   todayBytes: 0,
   activeTransfers: [],
   recentFiles: [],
-  recentEvents: [],
   circuits: {},
   failedCount: 0,
   fullSyncProgress: null,
@@ -241,12 +231,6 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
 
   handleStatusChanged: (event) => {
     set({ status: event.currentStatus })
-  },
-
-  handleOperCodeEvent: (event) => {
-    set((state) => ({
-      recentEvents: [event, ...state.recentEvents.slice(0, 49)],
-    }))
   },
 
   handleScanProgress: (event) => {

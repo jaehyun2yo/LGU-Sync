@@ -22,6 +22,9 @@
 - 핵심 서비스 전면 리팩토링 및 성능 최적화
 - polling 단일화 및 snapshot 전략 폐기
 - 대용량 파일 스트리밍 전환, 배치 병렬화
+- 미사용 5개 페이지 제거 (FileExplorer, FolderSettings, Statistics, Migration, Test)
+- IPC 채널 20+개 제거 (files:*, folders:*, migration:*, statistics:* 등)
+- ESLint flat config 마이그레이션 (eslint.config.mjs)
 
 ## [1.0.0] - 2026-02-24
 

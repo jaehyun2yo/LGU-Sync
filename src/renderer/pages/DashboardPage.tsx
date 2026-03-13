@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { cn, formatBytes, formatTime } from '../lib/utils'
 import { useSyncStore } from '../stores/sync-store'
+import { useDetectionStore } from '../stores/detection-store'
 import { useUiStore } from '../stores/ui-store'
 import type { SyncStatusType } from '../../core/types/sync-status.types'
 import type { SyncFileStatus } from '../../core/types/sync-status.types'
@@ -84,7 +85,6 @@ function SyncStatusCard() {
   const { showConfirm } = useUiStore()
   const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.idle
 
-  const isIdle = status === 'idle'
   const isPaused = status === 'paused'
   const isSyncing = status === 'syncing'
   const isRunning = isSyncing || isPaused
@@ -307,23 +307,26 @@ const OPERCODE_CONFIG: Record<string, { label: string; colorClass: string; bgCla
 }
 
 function EventTimeline() {
-  const { recentEvents } = useSyncStore()
+  const events = useDetectionStore((s) => s.events)
 
-  if (recentEvents.length === 0) {
+  // operCode가 있는 이벤트만 필터 (파일 변동 활동)
+  const operCodeEvents = events.filter((e) => e.operCode)
+
+  if (operCodeEvents.length === 0) {
     return null
   }
 
   return (
     <div className="bg-card border border-border rounded-lg p-4">
       <h3 className="text-sm font-semibold text-card-foreground mb-3">
-        실시간 이벤트
+        최근 활동
         <span className="ml-2 text-xs font-normal text-muted-foreground">
-          (최근 {recentEvents.length}건)
+          (최근 {Math.min(operCodeEvents.length, 20)}건)
         </span>
       </h3>
       <div className="space-y-1 max-h-[200px] overflow-y-auto">
-        {recentEvents.slice(0, 20).map((event, idx) => {
-          const config = OPERCODE_CONFIG[event.operCode] ?? {
+        {operCodeEvents.slice(0, 20).map((event) => {
+          const config = OPERCODE_CONFIG[event.operCode!] ?? {
             label: event.operCode,
             colorClass: 'text-muted-foreground',
             bgClass: 'bg-muted',
@@ -331,7 +334,7 @@ function EventTimeline() {
           }
           return (
             <div
-              key={`${event.timestamp}-${idx}`}
+              key={event.id}
               className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-accent/50 transition-colors"
             >
               <span className={cn('text-xs font-mono px-1.5 py-0.5 rounded', config.bgClass, config.colorClass)}>
@@ -341,7 +344,7 @@ function EventTimeline() {
                 {config.label}
               </span>
               <span className="text-xs text-card-foreground truncate flex-1">
-                {event.fileName}
+                {event.fileName ?? '-'}
               </span>
               <span className="text-[11px] text-muted-foreground shrink-0">
                 {new Date(event.timestamp).toLocaleTimeString('ko-KR')}
@@ -437,7 +440,12 @@ function RecentFilesList() {
           {recentFiles.slice(0, 20).map((file) => (
             <div
               key={file.id}
-              className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-accent/50 transition-colors"
+              className="flex items-center gap-3 py-2 px-2 rounded-md hover:bg-accent/50 transition-colors cursor-pointer"
+              onDoubleClick={async () => {
+                if (file.downloadPath) {
+                  await window.electronAPI.invoke('files:show-in-folder', { filePath: file.downloadPath })
+                }
+              }}
             >
               <FileStatusIcon status={file.status} />
               <div className="min-w-0 flex-1">

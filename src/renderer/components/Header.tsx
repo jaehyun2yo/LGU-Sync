@@ -5,12 +5,7 @@ import { useNotificationStore } from '../stores/notification-store'
 
 const pageTitles: Record<PageId, string> = {
   dashboard: '대시보드',
-  'file-explorer': '파일 탐색기',
-  'folder-settings': '폴더 설정',
-  'sync-log': '동기화 로그',
-  statistics: '통계',
-  migration: '마이그레이션',
-  test: '테스트',
+  'realtime-detection': '실시간 감지',
   settings: '설정',
 }
 

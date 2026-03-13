@@ -126,8 +126,6 @@ export class FileDetector implements IFileDetector {
         const maxNo = firstPage.items.length > 0
           ? Math.max(...firstPage.items.map((i) => i.historyNo))
           : 0
-        this.state.saveCheckpoint('last_history_no', String(maxNo))
-        this.logger.info('Polling baseline established', { maxHistoryNo: maxNo })
 
         // _includeExistingOnFirstPoll 플래그가 설정되었으면 기존 파일도 감지
         if (this._includeExistingOnFirstPoll && firstPage.items.length > 0) {
@@ -138,6 +136,8 @@ export class FileDetector implements IFileDetector {
           if (validItems.length > 0) {
             const detectedFiles = validItems.map((item) => this.toDetectedFile(item))
             this.notifyDetection(detectedFiles, 'polling')
+            // checkpoint는 핸들러 처리 후에만 갱신 (이벤트 유실 방지)
+            this.state.saveCheckpoint('last_history_no', String(maxNo))
             this.logger.info(`Initial detection: ${detectedFiles.length} existing files`, {
               count: detectedFiles.length,
             })
@@ -146,6 +146,8 @@ export class FileDetector implements IFileDetector {
           }
         }
 
+        this.state.saveCheckpoint('last_history_no', String(maxNo))
+        this.logger.info('Polling baseline established', { maxHistoryNo: maxNo })
         this.onPollSuccess()
         return []
       }
@@ -201,13 +203,13 @@ export class FileDetector implements IFileDetector {
         this.toDetectedFile(item),
       )
 
-      // checkpoint 갱신: DN 포함 전체 중 max historyNo
+      // Notify handlers first (이벤트 유실 방지: 처리 후 커밋 패턴)
+      this.notifyDetection(detectedFiles, 'polling')
+
+      // checkpoint 갱신: 핸들러 처리 후에만 갱신 (DN 포함 전체 중 max historyNo)
       const allNewItems = allHistoryItems.filter((item) => item.historyNo > lastNo)
       const maxHistoryNo = Math.max(...allNewItems.map((i) => i.historyNo))
       this.state.saveCheckpoint('last_history_no', String(maxHistoryNo))
-
-      // Notify handlers
-      this.notifyDetection(detectedFiles, 'polling')
 
       this.logger.info(`Detected ${detectedFiles.length} new events`, {
         count: detectedFiles.length,
@@ -318,6 +320,13 @@ export class FileDetector implements IFileDetector {
       this.logger.warn('Multiple consecutive polling failures', {
         failures: this.consecutiveFailures,
       })
+      this.eventBus.emit('detection:poll-error', {
+        consecutiveFailures: this.consecutiveFailures,
+        error: error.message,
+        backoffIntervalMs: this.consecutiveFailures >= BACKOFF_FAILURE_THRESHOLD
+          ? Math.min(this.pollingIntervalMs * 2, MAX_BACKOFF_INTERVAL_MS)
+          : undefined,
+      })
     }
 
     // 백오프: 폴링 간격 2배 증가 (최대 60초)
@@ -340,7 +349,11 @@ export class FileDetector implements IFileDetector {
   private notifyDetection(files: DetectedFile[], strategy: DetectionStrategy): void {
     // Notify registered handlers
     for (const handler of [...this.handlers]) {
-      handler(files, strategy)
+      try {
+        handler(files, strategy)
+      } catch (error) {
+        this.logger.error('Detection handler error', error as Error)
+      }
     }
 
     // Emit via EventBus

@@ -1,5 +1,5 @@
 # 외부웹하드동기화프로그램2 진행 상황
-최종 업데이트: 2026-03-11
+최종 업데이트: 2026-03-12
 
 ## 완료된 기능
 - [x] LGU+ 웹하드 폴링 기반 파일 감지 (FileDetector)
@@ -17,6 +17,8 @@
 - [x] 핵심 서비스 전면 리팩토링 및 성능 최적화
 - [x] 다운로드/감지 전담 팀 스킬 (멀티에이전트)
 - [x] 작업 문서 자동 리마인드 훅 (PostToolUse)
+- [x] 미사용 5개 페이지 제거 리팩토링 (FileExplorer, FolderSettings, Statistics, Migration, Test)
+- [x] 관련 IPC 채널 20+ 및 핸들러 제거 (ipc-types.ts, ipc-router.ts)
 
 ## 진행 중
 - [ ] (현재 진행 중인 작업을 여기에 기록)

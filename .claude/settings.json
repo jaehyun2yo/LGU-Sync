@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
@@ -36,8 +36,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/scripts/session-stop.sh"
+            "type": "prompt",
+            "prompt": "세션이 종료됩니다. 아래 순서로 자동 정리하세요:\n1. git status로 미커밋 변경 확인 → 있으면 커밋\n2. docs/progress.txt 업데이트 (완료/미완료/다음 작업)\n3. 기능 개발/버그 수정 작업이었으면 docs/work-logs/NNN-작업명.md 작성\n4. CHANGELOG.md [Unreleased] 섹션 반영\n5. 코드 변경이 있었으면 관련 docs/plans/ 스펙 동기화 필요 여부 확인\n\n정리 완료 후 간단한 핸드오프 요약을 출력하세요."
           }
         ]
       }

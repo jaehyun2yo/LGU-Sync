@@ -2,7 +2,7 @@ import type { ILGUplusClient, LGUplusFolderItem } from './types/lguplus-client.t
 import type { IWebhardUploader } from './types/webhard-uploader.types'
 import type { IStateManager } from './types/state-manager.types'
 import type { ILogger } from './types/logger.types'
-import { filterPathSegments } from './path-utils'
+import { cleanFolderPath, filterPathSegments } from './path-utils'
 
 export interface DiscoveryResult {
   total: number
@@ -49,8 +49,14 @@ export class FolderDiscovery {
       return result
     }
 
-    // Step 2: 게스트 폴더 전체 재귀 탐색
-    await this.discoverRecursive(rootId, '', result)
+    // Step 2: API 히스토리에서 상위 경로 접두사 탐색 (예: '올리기전용')
+    //   FolderDiscovery는 GUEST 루트부터 탐색하므로 상위 경로를 모름.
+    //   API의 ITEM_FOLDER_FULLPATH ('올리기전용 > GUEST > 업체A')에서
+    //   자식 폴더 앞의 접두사를 추출하여 경로 일관성 확보.
+    const ancestorPrefix = await this.discoverAncestorPrefix(rootId)
+
+    // Step 3: 게스트 폴더 전체 재귀 탐색 (접두사 포함)
+    await this.discoverRecursive(rootId, ancestorPrefix, result)
 
     this.logger.info('Folder discovery completed', {
       total: result.total,
@@ -59,6 +65,41 @@ export class FolderDiscovery {
     })
 
     return result
+  }
+
+  /** API 히스토리에서 GUEST 루트의 상위 경로 접두사를 추출
+   *  예: API path '올리기전용 > GUEST > 업체A' + 자식 폴더 '업체A'
+   *      → 접두사 '/올리기전용'
+   */
+  private async discoverAncestorPrefix(rootId: number): Promise<string> {
+    try {
+      const rootFolders = await this.lguplus.getSubFolders(rootId)
+      if (rootFolders.length === 0) return ''
+
+      const childNames = new Set(rootFolders.map((f) => f.folderName))
+
+      const history = await this.lguplus.getUploadHistory({ page: 1 })
+      for (const item of history.items) {
+        const fullpath = item.itemFolderFullpath?.trim()
+        if (!fullpath || fullpath === '/') continue
+
+        const cleaned = cleanFolderPath(fullpath)
+        const segments = cleaned.split('/').filter(Boolean)
+
+        // 자식 폴더명이 경로에 나타나는 위치를 찾아 그 앞부분이 접두사
+        const matchIdx = segments.findIndex((seg) => childNames.has(seg))
+        if (matchIdx > 0) {
+          const prefix = `/${segments.slice(0, matchIdx).join('/')}`
+          this.logger.info('Discovered ancestor prefix from upload history', { prefix })
+          return prefix
+        }
+      }
+    } catch (error) {
+      this.logger.debug('Could not discover ancestor prefix from history', {
+        error: (error as Error).message,
+      })
+    }
+    return ''
   }
 
   /** 폴더를 재귀적으로 탐색하며 모든 하위 폴더를 DB에 등록 */

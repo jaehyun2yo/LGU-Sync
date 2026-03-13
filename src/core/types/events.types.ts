@@ -56,6 +56,11 @@ export interface EventMap {
     totalPages: number
     discoveredCount: number
   }
+  'detection:poll-error': {
+    consecutiveFailures: number
+    error: string
+    backoffIntervalMs?: number
+  }
   'opercode:event': {
     operCode: OperCode
     fileName: string

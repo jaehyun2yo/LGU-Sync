@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect, useState, useMemo } from 'react'
+import { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import {
   Radio,
   PlayCircle,
@@ -22,10 +22,8 @@ import {
   type DetectionEvent,
   type DetectionStatus,
 } from '../stores/detection-store'
-import { useIpcEvent } from '../hooks/useIpcEvent'
 import type {
   DetectionEventPush,
-  DetectionStatusPush,
   DetectionSessionInfo,
   FolderInfoIpc,
 } from '../../shared/ipc-types'
@@ -54,20 +52,6 @@ function getOperCodeLabel(code: string): string {
     case 'FMV': return '폴더이동'
     case 'FRN': return '폴더이름변경'
     default: return code
-  }
-}
-
-// 이벤트 타입별 색상
-function getEventColor(type: DetectionEventPush['type']): string {
-  switch (type) {
-    case 'started': return 'text-info'
-    case 'detected': return 'text-warning'
-    case 'downloaded': return 'text-success'
-    case 'failed': return 'text-error'
-    case 'error': return 'text-error'
-    case 'stopped': return 'text-muted-foreground'
-    case 'recovery': return 'text-info'
-    default: return 'text-foreground'
   }
 }
 
@@ -131,6 +115,42 @@ function formatSessionDuration(startedAt: string, stoppedAt: string | null): str
   if (min < 60) return `${min}분 ${sec % 60}초`
   const hr = Math.floor(min / 60)
   return `${hr}시간 ${min % 60}분`
+}
+
+// 다운로드 폴더 삭제 버튼
+function ClearDownloadsButton() {
+  const [clearing, setClearing] = useState(false)
+
+  const handleClear = async () => {
+    if (!confirm('다운로드 폴더의 모든 파일과 하위 폴더를 삭제하시겠습니까?')) return
+    setClearing(true)
+    try {
+      const res = await window.electronAPI.invoke('test:clear-downloads')
+      if (res.success && res.data) {
+        const { deletedFiles, deletedFolders, resetRecords } = res.data
+        alert(`삭제 완료: 폴더 ${deletedFolders}개, 파일 ${deletedFiles}개, DB 레코드 ${resetRecords}건 초기화`)
+      } else {
+        alert(`삭제 실패: ${res.error?.message ?? '알 수 없는 오류'}`)
+      }
+    } catch (e) {
+      alert(`삭제 실패: ${(e as Error).message}`)
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-error/30 bg-error/10 text-error hover:bg-error/20 transition-colors disabled:opacity-50"
+      onClick={handleClear}
+      disabled={clearing}
+      title="다운로드 폴더 전체 삭제"
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+      {clearing ? '삭제 중...' : '폴더 삭제'}
+    </button>
+  )
 }
 
 // 감지 상태 패널
@@ -210,6 +230,9 @@ function StatusPanel() {
             <FolderOpen className="h-3.5 w-3.5" />
             다운로드 폴더
           </button>
+
+          {/* 다운로드 폴더 삭제 */}
+          <ClearDownloadsButton />
 
           {/* 알림 설정 */}
           <WatchFolderSettings />
@@ -769,36 +792,6 @@ function SessionRow({ session }: { session: DetectionSessionInfo }) {
 }
 
 export function RealtimeDetectionPage() {
-  // 감지 상태 초기 로드
-  const fetchStatus = useDetectionStore((s) => s.fetchStatus)
-  useEffect(() => {
-    fetchStatus()
-  }, [fetchStatus])
-
-  // 신규 IPC 이벤트 구독: detection:event
-  const handleDetectionEvent = useDetectionStore((s) => s.handleDetectionEvent)
-  const onEvent = useCallback(
-    (data: DetectionEventPush) => handleDetectionEvent(data),
-    [handleDetectionEvent],
-  )
-  useIpcEvent('detection:event', onEvent)
-
-  // 신규 IPC 이벤트 구독: detection:status-changed
-  const handleStatusChanged = useDetectionStore((s) => s.handleStatusChanged)
-  const onStatusChanged = useCallback(
-    (data: DetectionStatusPush) => handleStatusChanged(data),
-    [handleStatusChanged],
-  )
-  useIpcEvent('detection:status-changed', onStatusChanged)
-
-  // IPC 이벤트 구독: detection:start-progress
-  const handleStartProgress = useDetectionStore((s) => s.handleStartProgress)
-  const onStartProgress = useCallback(
-    (data: { step: string; message: string; current: number; total: number }) => handleStartProgress(data),
-    [handleStartProgress],
-  )
-  useIpcEvent('detection:start-progress', onStartProgress)
-
   return (
     <div className="flex flex-col h-full gap-4">
       {/* 헤더 */}
@@ -808,7 +801,7 @@ export function RealtimeDetectionPage() {
           <h2 className="text-lg font-semibold text-card-foreground">실시간 감지</h2>
         </div>
         <p className="text-sm text-muted-foreground mt-1">
-          외부 웹하드의 파일 변동을 실시간으로 감지하고 이벤트 로그를 표시합니다.
+          파일 감지, 다운로드, 업로드 등 모든 동기화 활동을 실시간으로 표시합니다.
         </p>
       </div>
 

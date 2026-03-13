@@ -2,13 +2,7 @@ import { create } from 'zustand'
 
 export type PageId =
   | 'dashboard'
-  | 'file-explorer'
-  | 'folder-settings'
-  | 'sync-log'
-  | 'statistics'
-  | 'migration'
   | 'realtime-detection'
-  | 'test'
   | 'settings'
 
 interface UiState {

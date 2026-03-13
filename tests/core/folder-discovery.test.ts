@@ -55,6 +55,7 @@ function mockStateManager(): IStateManager {
     saveCheckpoint: vi.fn(),
     saveFile: vi.fn().mockReturnValue('file-id'),
     updateFileStatus: vi.fn(),
+    updateFileInfo: vi.fn(),
     getFile: vi.fn().mockReturnValue(null),
     getFilesByFolder: vi.fn().mockReturnValue([]),
     getFileByHistoryNo: vi.fn().mockReturnValue(null),
@@ -64,6 +65,8 @@ function mockStateManager(): IStateManager {
     getFolders: vi.fn().mockReturnValue([]),
     getFolder: vi.fn().mockReturnValue(null),
     getFolderByLguplusId: vi.fn().mockReturnValue(null),
+    bulkUpdateFilePaths: vi.fn().mockReturnValue(0),
+    markFolderFilesDeleted: vi.fn().mockReturnValue(0),
     logEvent: vi.fn(),
     getEvents: vi.fn().mockReturnValue([]),
     addToDlq: vi.fn(),
@@ -72,7 +75,17 @@ function mockStateManager(): IStateManager {
     getDailyStats: vi.fn().mockReturnValue([]),
     incrementDailyStats: vi.fn(),
     getLogs: vi.fn().mockReturnValue([]),
+    getLogCount: vi.fn().mockReturnValue(0),
     addLog: vi.fn(),
+    saveFolderChange: vi.fn().mockReturnValue(1),
+    getFolderChanges: vi.fn().mockReturnValue([]),
+    updateFolderChange: vi.fn(),
+    createDetectionSession: vi.fn().mockReturnValue('session-id'),
+    endDetectionSession: vi.fn(),
+    updateDetectionSession: vi.fn(),
+    getLastDetectionSession: vi.fn().mockReturnValue(null),
+    getDetectionSessions: vi.fn().mockReturnValue({ items: [], total: 0 }),
+    resetDownloadedFiles: vi.fn().mockReturnValue(0),
     initialize: vi.fn(),
     close: vi.fn(),
   }
@@ -99,7 +112,11 @@ describe('FolderDiscovery - 병렬 처리', () => {
     // 기본: leaf 노드는 빈 배열 반환
     ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValue([])
 
-    // HOME → [올리기전용]
+    // discoverAncestorPrefix: HOME → [올리기전용] (prefix 탐색용 1st call)
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
+    ])
+    // discoverRecursive: HOME → [올리기전용] (실제 탐색용 2nd call)
     ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
     ])
@@ -138,7 +155,11 @@ describe('FolderDiscovery - 병렬 처리', () => {
     // 기본: leaf 노드는 빈 배열 반환
     ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValue([])
 
-    // HOME → [올리기전용]
+    // discoverAncestorPrefix: HOME → [올리기전용] (prefix 탐색용 1st call)
+    ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
+    ])
+    // discoverRecursive: HOME → [올리기전용] (실제 탐색용 2nd call)
     ;(lguplus.getSubFolders as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       { folderId: 2000, folderName: '올리기전용', parentFolderId: 1000 },
     ])
